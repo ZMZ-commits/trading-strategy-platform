@@ -2,35 +2,42 @@
 
 ## Branching Strategy
 
-This repository follows a **prod → staging → feature** branching model.
+This repository follows a **4-tier** branching model.
+
+```
+[feature/*]  ──>  [deployment]  ──>  [staging]  ──>  [main]
+```
 
 ### Branches
 
-| Branch | Purpose | Protected |
-|--------|---------|----------|
-| `main` | Production. Never push directly. | Yes |
-| `deployment` | Staging / integration. Always exists, always branched from `main`. | Yes |
-| `feature/*` | All dev work. Branched from `deployment`. | No |
+| Branch | Purpose | Base | Protected |
+|--------|---------|------|-----------|
+| `main` | Production. Never push directly. | — | Yes |
+| `staging` | Pre-production. Always exists. PRs from `deployment` only. | `main` | Yes |
+| `deployment` | Development integration. Always exists. PRs from `feature/*` only. | `staging` | Yes |
+| `feature/*` | All dev work. Short-lived. | `deployment` | No |
 
 ### Rules
 
-1. **`main` is production** — direct pushes are forbidden. Changes reach `main` only via PR from `deployment`.
-2. **`deployment` is staging** — always exists. It is always branched off `main` and is the base for all feature work. Changes reach `deployment` only via PR from a feature branch.
-3. **Feature branches** — branch from `deployment`, not `main`. Name them `feature/<short-description>`. When done, open a PR back into `deployment`.
+1. **`main` is production** — direct pushes are forbidden. Only `staging` can PR into it.
+2. **`staging` is pre-production** — always exists. Receives PRs from `deployment`. PRs into `main` for releases.
+3. **`deployment` is the dev integration branch** — always exists, branched from `staging`. All feature branches are cut from here and PR back here.
+4. **Feature branches** — always branched from `deployment`. Named `feature/<short-description>`. PR back into `deployment` when done.
 
 ### Workflow
 
 ```
 main (prod)
-  └── deployment (staging)       ← always branched from main
-        ├── feature/my-feature   ← branched from deployment
-        ├── feature/another      ← branched from deployment
-        └── ...
+  └── staging (pre-prod)            ← branched from main
+        └── deployment (dev/integration) ← branched from staging
+              ├── feature/my-feature     ← branched from deployment
+              ├── feature/another        ← branched from deployment
+              └── ...
 ```
 
 **Merge flow:**
 ```
-feature/* → deployment → main
+feature/* → deployment → staging → main
 ```
 
 ### Quick-start for a new feature
@@ -47,12 +54,13 @@ git checkout -b feature/my-feature
 git push -u origin feature/my-feature
 
 # 4. Open a PR: feature/my-feature → deployment
-# 5. After review + merge, open a PR: deployment → main
+# 5. After testing, open a PR: deployment → staging
+# 6. After sign-off, open a PR: staging → main
 ```
 
 ### For AI agents (Claude Code)
 
-- **Never push directly to `main` or `deployment`.**
+- **Never push directly to `main`, `staging`, or `deployment`.**
 - All development work goes on a `feature/*` branch cut from `deployment`.
-- PRs target `deployment` first, then `deployment` targets `main`.
-- When creating a new repository under this project, apply the same three-tier structure.
+- PRs always flow: `feature/*` → `deployment` → `staging` → `main`.
+- When creating a new repository under this project, apply the same 4-tier structure: `main`, `staging`, `deployment`, `feature/*`.
