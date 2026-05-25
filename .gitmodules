@@ -1,0 +1,16 @@
+[submodule "packages/trading-strategy-backend"]
+	path = packages/trading-strategy-backend
+	url = https://github.com/zmz-commits/trading-strategy-backend.git
+	branch = claude/serene-euler-Gq1ma
+[submodule "packages/trading-strategy-engine"]
+	path = packages/trading-strategy-engine
+	url = https://github.com/zmz-commits/trading-strategy-engine.git
+	branch = claude/serene-euler-Gq1ma
+[submodule "packages/trading-strategy-data-pipeline"]
+	path = packages/trading-strategy-data-pipeline
+	url = https://github.com/zmz-commits/trading-strategy-data-pipeline.git
+	branch = claude/serene-euler-Gq1ma
+[submodule "packages/trading-strategy-ui"]
+	path = packages/trading-strategy-ui
+	url = https://github.com/zmz-commits/trading-strategy-ui.git
+	branch = claude/serene-euler-Gq1ma
