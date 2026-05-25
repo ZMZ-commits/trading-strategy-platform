@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# NEVER commit terraform.tfvars to git.
+
+aws_region           = "us-east-1"
+frontend_bucket_name = "trading-strategy-ui-yourname-2026"   # must be globally unique
+ssh_public_key       = "ssh-rsa AAAA...your public key here..."
+ssh_allowed_cidr     = ["YOUR.IP.HERE/32"]
