@@ -1,0 +1,37 @@
+# Local integration testing — requires both repos cloned alongside this one.
+# Usage:
+#   docker-compose up --build
+#   open http://localhost:5173
+
+services:
+  backend:
+    build:
+      context: ../trading-strategy-backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - CORS_ORIGINS=http://localhost:5173
+      - STORE_ROOT=/data/trading-strategies
+    volumes:
+      - strategy-data:/data/trading-strategies
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ../trading-strategy-ui
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  strategy-data:
