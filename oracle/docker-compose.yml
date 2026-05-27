@@ -1,0 +1,66 @@
+# Runs on the Oracle Cloud VM.
+# All 3 backend environments + Caddy reverse proxy on one machine.
+# Images are pulled from GitHub Container Registry (ghcr.io), pushed by CI.
+
+services:
+  backend-prod:
+    image: ghcr.io/zmz-commits/trading-strategy-backend:prod
+    container_name: backend-prod
+    restart: unless-stopped
+    environment:
+      - CORS_ORIGINS=https://trading.zemingzhang.com
+      - STORE_ROOT=/data/trading-strategies
+    volumes:
+      - /data/prod:/data/trading-strategies
+    networks:
+      - web
+
+  backend-stg:
+    image: ghcr.io/zmz-commits/trading-strategy-backend:stg
+    container_name: backend-stg
+    restart: unless-stopped
+    environment:
+      - CORS_ORIGINS=https://trading-strategy-ui-stg.pages.dev
+      - STORE_ROOT=/data/trading-strategies
+    volumes:
+      - /data/stg:/data/trading-strategies
+    networks:
+      - web
+
+  backend-dev:
+    image: ghcr.io/zmz-commits/trading-strategy-backend:dev
+    container_name: backend-dev
+    restart: unless-stopped
+    environment:
+      - CORS_ORIGINS=https://trading-strategy-ui-dev.pages.dev
+      - STORE_ROOT=/data/trading-strategies
+    volumes:
+      - /data/dev:/data/trading-strategies
+    networks:
+      - web
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+    depends_on:
+      - backend-prod
+      - backend-stg
+      - backend-dev
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
