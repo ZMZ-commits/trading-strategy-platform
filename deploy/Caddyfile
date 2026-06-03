@@ -1,6 +1,7 @@
 # Caddy reverse proxy with automatic HTTPS via Let's Encrypt.
-# DNS records for these subdomains must point to the Oracle VM's public IP.
+# DNS records for these subdomains must point to the Hetzner VM's public IP.
 
+# ── Backends (API) ──────────────────────────────────────────────
 api.zemingzhang.com {
     reverse_proxy backend-prod:8000
     encode gzip
@@ -13,5 +14,21 @@ api-stg.zemingzhang.com {
 
 api-dev.zemingzhang.com {
     reverse_proxy backend-dev:8000
+    encode gzip
+}
+
+# ── Frontends (React UI) ────────────────────────────────────────
+trading.zemingzhang.com {
+    reverse_proxy frontend-prod:80
+    encode gzip
+}
+
+trading-stg.zemingzhang.com {
+    reverse_proxy frontend-stg:80
+    encode gzip
+}
+
+trading-dev.zemingzhang.com {
+    reverse_proxy frontend-dev:80
     encode gzip
 }

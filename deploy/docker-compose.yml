@@ -1,6 +1,6 @@
-# Runs on the Oracle Cloud VM.
-# All 3 backend environments + Caddy reverse proxy on one machine.
-# Images are pulled from GitHub Container Registry (ghcr.io), pushed by CI.
+# Runs on the Hetzner VM.
+# All 3 backend environments + 3 frontend environments + Caddy reverse proxy.
+# Images are built on the server (or pulled from ghcr.io when CI is wired up).
 
 services:
   backend-prod:
@@ -20,7 +20,7 @@ services:
     container_name: backend-stg
     restart: unless-stopped
     environment:
-      - CORS_ORIGINS=https://trading-strategy-ui-stg.pages.dev
+      - CORS_ORIGINS=https://trading-stg.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
     volumes:
       - /data/stg:/data/trading-strategies
@@ -32,10 +32,31 @@ services:
     container_name: backend-dev
     restart: unless-stopped
     environment:
-      - CORS_ORIGINS=https://trading-strategy-ui-dev.pages.dev
+      - CORS_ORIGINS=https://trading-dev.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
     volumes:
       - /data/dev:/data/trading-strategies
+    networks:
+      - web
+
+  frontend-prod:
+    image: ghcr.io/zmz-commits/trading-strategy-ui:prod
+    container_name: frontend-prod
+    restart: unless-stopped
+    networks:
+      - web
+
+  frontend-stg:
+    image: ghcr.io/zmz-commits/trading-strategy-ui:stg
+    container_name: frontend-stg
+    restart: unless-stopped
+    networks:
+      - web
+
+  frontend-dev:
+    image: ghcr.io/zmz-commits/trading-strategy-ui:dev
+    container_name: frontend-dev
+    restart: unless-stopped
     networks:
       - web
 
@@ -56,6 +77,9 @@ services:
       - backend-prod
       - backend-stg
       - backend-dev
+      - frontend-prod
+      - frontend-stg
+      - frontend-dev
 
 networks:
   web:
