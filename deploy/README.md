@@ -81,16 +81,17 @@ After it finishes, **log out** and SSH back in as the `deploy` user:
 ssh -i $HOME\.ssh\hetzner deploy@<vm-public-ip>
 ```
 
-### 5. Create a GitHub Personal Access Token (PAT) for ghcr.io
+### 5. Make the container image public (no token needed)
 
-1. GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token**
-2. Scope: `read:packages` (minimum)
-3. Copy the token
+Because all repos are public, we make the Docker image public too — then the
+server pulls it with **no authentication at all**. No Personal Access Token needed.
 
-On the VM (as `deploy` user):
-```bash
-echo <YOUR_PAT> | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
-```
+**After the first deploy runs** (which creates the package):
+1. Go to <https://github.com/orgs/zmz-commits/packages>
+2. Click the **trading-strategy-backend** package
+3. **Package settings** (right side) → scroll to **Danger Zone** → **Change visibility** → **Public**
+
+That's a one-time click. From then on, the server pulls public images with zero credentials.
 
 ### 6. Configure DNS in Cloudflare
 
