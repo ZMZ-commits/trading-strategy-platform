@@ -1,6 +1,6 @@
 # Hetzner Cloud — Deployment Guide
 
-Hosts all 3 backend environments (prod/stg/dev) + Caddy reverse proxy on a single Hetzner Cloud VM. ~$4/month (€3.79) for a CAX11: 2 ARM vCPU, 4 GB RAM, 40 GB SSD, 20 TB bandwidth.
+Hosts all 3 backend environments (prod/stg/dev) + Caddy reverse proxy on a single Hetzner Cloud VM. ~$4.99/month for a CX23: 2 vCPU (x86), 4 GB RAM, 40 GB SSD, 20 TB bandwidth.
 
 This setup is **provider-agnostic** — the same docker-compose, Caddyfile, and GitHub Actions workflows work on any Ubuntu 22.04 VM (DigitalOcean, Linode, Oracle, etc.). Just change the SSH host secret.
 
@@ -11,12 +11,12 @@ GitHub push (main / staging / deployment)
     │
     ▼
 GitHub Actions:
-  1. Build Docker image (linux/arm64 — Hetzner CAX is ARM)
+  1. Build Docker image (linux/amd64 — Hetzner CX is x86)
   2. Push to ghcr.io/zmz-commits/trading-strategy-backend:{prod|stg|dev}
   3. SSH to VM, docker compose pull + up -d
     │
     ▼
-Hetzner CAX11 VM (Ubuntu 22.04, ARM):
+Hetzner CX23 VM (Ubuntu 22.04, x86):
   Caddy (auto-HTTPS) ─┬─ api.zemingzhang.com      → backend-prod:8000
                       ├─ api-stg.zemingzhang.com  → backend-stg:8000
                       └─ api-dev.zemingzhang.com  → backend-dev:8000
@@ -50,7 +50,7 @@ Hetzner CAX11 VM (Ubuntu 22.04, ARM):
 1. **Servers → Add Server**
 2. **Location**: pick the closest to you (Ashburn VA for US East, Hillsboro OR for US West, Falkenstein/Nuremberg/Helsinki for Europe)
 3. **Image**: Ubuntu 22.04
-4. **Type**: **Shared vCPU → ARM (Ampere) → CAX11** (2 vCPU, 4 GB RAM, €3.79/mo)
+4. **Type**: **Shared vCPU → Intel/AMD (x86) → CX23** (2 vCPU, 4 GB RAM, $4.99/mo)
 5. **Networking**: leave defaults (Public IPv4 + IPv6 enabled)
 6. **SSH keys**: select the key you added
 7. **Volumes / Firewall / Backups**: skip for now
@@ -187,7 +187,7 @@ docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 ## Monthly Cost
 
-- **Hetzner CAX11**: €3.79/month (~$4)
+- **Hetzner CX23**: $4.99/month
 - **Cloudflare Pages**: $0
 - **Cloudflare DNS**: $0
 - **Domain (zemingzhang.com)**: ~$10/year
