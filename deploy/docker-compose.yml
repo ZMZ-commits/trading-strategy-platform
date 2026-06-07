@@ -1,8 +1,37 @@
 # Runs on the Hetzner VM.
-# All 3 backend environments + 3 frontend environments + Caddy reverse proxy.
-# Images are built on the server (or pulled from ghcr.io when CI is wired up).
+# 3 backends + 3 frontends + Caddy + Redis + live data pipeline.
+#
+# Live data: ONE pipeline holds the single Alpaca data-stream connection
+# (free tier allows one) and publishes ticks to Redis. All 3 backends
+# subscribe to the same Redis and fan out to browsers over WebSocket.
+#
+# Alpaca keys come from deploy/.env (NOT committed):
+#   ALPACA_API_KEY=...
+#   ALPACA_SECRET_KEY=...
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - web
+
+  pipeline:
+    image: ghcr.io/zmz-commits/trading-strategy-data-pipeline:latest
+    container_name: pipeline
+    restart: unless-stopped
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ALPACA_API_KEY=${ALPACA_API_KEY:-}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY:-}
+      - ALPACA_FEED=${ALPACA_FEED:-iex}
+      - SYMBOLS=${SYMBOLS:-AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL,META,SPY}
+    depends_on:
+      - redis
+    networks:
+      - web
+
   backend-prod:
     image: ghcr.io/zmz-commits/trading-strategy-backend:prod
     container_name: backend-prod
@@ -10,8 +39,11 @@ services:
     environment:
       - CORS_ORIGINS=https://trading.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
+      - REDIS_URL=redis://redis:6379
     volumes:
       - /data/prod:/data/trading-strategies
+    depends_on:
+      - redis
     networks:
       - web
 
@@ -22,8 +54,11 @@ services:
     environment:
       - CORS_ORIGINS=https://trading-stg.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
+      - REDIS_URL=redis://redis:6379
     volumes:
       - /data/stg:/data/trading-strategies
+    depends_on:
+      - redis
     networks:
       - web
 
@@ -34,8 +69,11 @@ services:
     environment:
       - CORS_ORIGINS=https://trading-dev.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
+      - REDIS_URL=redis://redis:6379
     volumes:
       - /data/dev:/data/trading-strategies
+    depends_on:
+      - redis
     networks:
       - web
 
