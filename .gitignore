@@ -1,0 +1,3 @@
+# Local env files with secrets (Alpaca keys, etc.) — never commit
+deploy/.env
+.env
