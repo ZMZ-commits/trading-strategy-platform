@@ -47,6 +47,8 @@ esac
 
 echo "==> Restarting stack"
 cd /opt/trading-platform/deploy
-docker compose up -d
+# --remove-orphans drops containers for services no longer in the compose file
+# (e.g. the frontend-* containers, now that the UI is on Cloudflare Pages).
+docker compose up -d --remove-orphans
 docker image prune -f
 echo "==> Redeploy complete."
