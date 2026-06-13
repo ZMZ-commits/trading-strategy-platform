@@ -1,5 +1,6 @@
 # Runs on the Hetzner VM.
-# 3 backends + 3 frontends + Caddy + Redis + live data pipeline.
+# 3 backends + Caddy + Redis + live data pipeline.
+# (The UI is served by Cloudflare Pages, not this VM.)
 #
 # Live data: ONE pipeline holds the single Alpaca data-stream connection
 # (free tier allows one) and publishes ticks to Redis. All 3 backends
@@ -77,27 +78,6 @@ services:
     networks:
       - web
 
-  frontend-prod:
-    image: ghcr.io/zmz-commits/trading-strategy-ui:prod
-    container_name: frontend-prod
-    restart: unless-stopped
-    networks:
-      - web
-
-  frontend-stg:
-    image: ghcr.io/zmz-commits/trading-strategy-ui:stg
-    container_name: frontend-stg
-    restart: unless-stopped
-    networks:
-      - web
-
-  frontend-dev:
-    image: ghcr.io/zmz-commits/trading-strategy-ui:dev
-    container_name: frontend-dev
-    restart: unless-stopped
-    networks:
-      - web
-
   caddy:
     image: caddy:2
     container_name: caddy
@@ -115,9 +95,6 @@ services:
       - backend-prod
       - backend-stg
       - backend-dev
-      - frontend-prod
-      - frontend-stg
-      - frontend-dev
 
 networks:
   web:

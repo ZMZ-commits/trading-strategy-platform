@@ -18,17 +18,5 @@ api-dev.zemingzhang.com {
 }
 
 # ── Frontends (React UI) ────────────────────────────────────────
-trading.zemingzhang.com {
-    reverse_proxy frontend-prod:80
-    encode gzip
-}
-
-trading-stg.zemingzhang.com {
-    reverse_proxy frontend-stg:80
-    encode gzip
-}
-
-trading-dev.zemingzhang.com {
-    reverse_proxy frontend-dev:80
-    encode gzip
-}
+# The UI is served by Cloudflare Pages, not this VM. The trading*.zemingzhang.com
+# domains point at Cloudflare; Caddy here only proxies the APIs above.
