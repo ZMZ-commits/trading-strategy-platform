@@ -1,5 +1,14 @@
 # Trading Strategy Platform
 
+## 🟢 START HERE (AI session bootstrap)
+
+**Before doing any work, every session:**
+1. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the overall system, diagram, deploy topology, and cross-repo state.
+2. Read [`docs/AI_ONBOARDING.md`](docs/AI_ONBOARDING.md) — the read-order, the "find the newest branch" one-liner, and the doc-maintenance routine.
+3. For any repo you'll touch, read its `AI_CONTEXT.md` (backend / engine / data-pipeline / ui each have one).
+4. **Recompute the newest branch per repo from live git** — do not assume `main` is latest; `staging`/`dev` may be ahead (see `AI_ONBOARDING.md` §2).
+5. When you finish work that changed code, **update the affected `AI_CONTEXT.md` and `docs/` per the maintenance routine** so the next session starts current.
+
 ## Branching Strategy
 
 This repository follows a **3-tier** branching model with three permanent long-lived branches.
@@ -43,11 +52,23 @@ feature/* → dev → staging → main
 
 ### Deployed environments
 
-| Branch | Environment | UI | API |
-|--------|-------------|-----|-----|
-| `main` | Production | `trading.zemingzhang.com` | `api.zemingzhang.com` |
-| `staging` | Staging | `trading-stg.zemingzhang.com` | `api-stg.zemingzhang.com` |
-| `dev` | Dev | `trading-dev.zemingzhang.com` | `api-dev.zemingzhang.com` |
+`dev`, `staging`, and `main` are the **long-lived branches deployed to the cloud**
+— each push to one auto-deploys its environment via GitHub Actions. `feature/*`
+branches are **never deployed**; they are tested **locally via Docker** before the
+PR into `dev`.
+
+| Branch | Environment | Deploy target | UI | API |
+|--------|-------------|---------------|-----|-----|
+| `feature/*` | Local only | **Docker on dev machine** (`docker compose up`) — no cloud deploy | `localhost:5173` | `localhost:8000` |
+| `dev` | Dev (cloud) | Auto-deploy on push | `trading-dev.zemingzhang.com` | `api-dev.zemingzhang.com` |
+| `staging` | Staging (cloud) | Auto-deploy on push | `trading-stg.zemingzhang.com` | `api-stg.zemingzhang.com` |
+| `main` | Production (cloud) | Auto-deploy on push | `trading.zemingzhang.com` | `api.zemingzhang.com` |
+
+**Local Docker test (feature branches):** from the platform repo, `docker compose
+up` (root `docker-compose.yml`) builds backend + UI from the sibling working trees
+so you can validate a feature before opening the PR into `dev`. CI deploy
+workflows trigger **only** on `dev`/`staging`/`main`, so feature pushes never
+touch the cloud.
 
 ### Quick-start for a new feature
 
@@ -59,13 +80,16 @@ git pull origin dev
 # 2. Branch off dev
 git checkout -b feature/my-feature
 
-# 3. Do your work, then push
+# 3. Do your work, then test it LOCALLY via Docker (no cloud deploy for features)
+docker compose up --build       # backend → :8000, UI → :5173
+
+# 4. Push the feature branch
 git push -u origin feature/my-feature
 
-# 4. Open a PR: feature/my-feature → dev
-# 5. After testing, open a PR: dev → staging
-# 6. After sign-off, open a PR: staging → main
-# 7. Delete the feature branch after merge
+# 5. Open a PR: feature/my-feature → dev   (merging here auto-deploys the dev cloud env)
+# 6. After dev verification, open a PR: dev → staging
+# 7. After sign-off, open a PR: staging → main  (production)
+# 8. Delete the feature branch after merge
 ```
 
 ### For AI agents (Claude Code)
