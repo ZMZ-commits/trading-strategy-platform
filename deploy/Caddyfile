@@ -20,3 +20,14 @@ api-dev.zemingzhang.com {
 # ── Frontends (React UI) ────────────────────────────────────────
 # The UI is served by Cloudflare Pages, not this VM. The trading*.zemingzhang.com
 # domains point at Cloudflare; Caddy here only proxies the APIs above.
+
+# ── Optional: JupyterLab authoring (DISABLED by default) ─────────
+# JupyterLab is arbitrary code execution. By default it is NOT exposed here —
+# reach it via an SSH tunnel (see deploy/docker-compose.yml). Only enable public
+# access AFTER (1) setting JUPYTER_TOKEN in deploy/.env and (2) creating a DNS
+# record  lab.zemingzhang.com -> VM IP. Then uncomment:
+#
+# lab.zemingzhang.com {
+#     reverse_proxy jupyterlab:8888
+#     encode gzip
+# }
