@@ -1,0 +1,37 @@
+name: Deploy infra → Hetzner VM
+
+# Applies infrastructure changes (docker-compose + Caddyfile) to the VM whenever
+# they change on main. Does NOT rebuild app images — backend/pipeline images are
+# built & deployed by their own repos. This only refreshes the compose stack and
+# reloads Caddy, so new services (jupyterlab, sandbox) come up and routing
+# changes apply without a manual VM step.
+#
+# Requires repo secrets: SSH_HOST, SSH_KEY (same values the backend repo uses).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Apply compose + reload Caddy on the VM
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and apply infra
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-platform
+            git pull --ff-only
+            cd deploy
+            docker compose up -d --remove-orphans
+            # Apply Caddyfile changes without dropping connections (fallback: restart).
+            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || docker compose restart caddy
+            docker image prune -f
