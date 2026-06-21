@@ -96,6 +96,45 @@ services:
       - backend-stg
       - backend-dev
 
+  # ── Indicator authoring (JupyterLab) ─────────────────────────────
+  # Owner-only Python environment for prototyping custom indicators.
+  # SECURITY: JupyterLab is arbitrary code execution. By default it is bound to
+  # localhost on the VM (NOT internet-exposed) — reach it via an SSH tunnel:
+  #   ssh -L 8888:127.0.0.1:8888 deploy@<vm-ip>   then open http://localhost:8888
+  # Set a token in deploy/.env (NOT committed):  JUPYTER_TOKEN=...
+  # To expose it publicly instead, see the commented lab.* block in Caddyfile.
+  jupyterlab:
+    image: jupyter/scipy-notebook:latest
+    container_name: jupyterlab
+    restart: unless-stopped
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
+    ports:
+      - "127.0.0.1:8888:8888"   # localhost-only; tunnel in via SSH
+    volumes:
+      - jupyter_work:/home/jovyan/work   # notebooks persist here; NO prod data mounted
+    mem_limit: 2g
+    cpus: "1.5"
+    networks:
+      - web
+
+  # ── Sandbox (published-indicator execution) ──────────────────────
+  # PLACEHOLDER for Phase 1b: runs published compute(ctx) on demand, invoked by
+  # the backend. No worker code yet — it idles. When wired, harden further:
+  # no network egress, ephemeral-per-run (or gVisor/Firecracker), dep allowlist.
+  sandbox:
+    image: python:3.11-slim
+    container_name: sandbox
+    restart: unless-stopped
+    command: ["sleep", "infinity"]   # idle until the execution worker is added
+    mem_limit: 1g
+    cpus: "1.0"
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - web
+
 networks:
   web:
     driver: bridge
@@ -103,3 +142,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  jupyter_work:
