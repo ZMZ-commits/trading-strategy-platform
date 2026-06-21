@@ -28,6 +28,10 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             set -e
+            # Ensure the deploy user owns the repo (it may have been cloned as root),
+            # otherwise git pull can't write .git. deploy has passwordless sudo.
+            sudo chown -R deploy:deploy /opt/trading-platform 2>/dev/null || true
+            git config --global --add safe.directory /opt/trading-platform 2>/dev/null || true
             cd /opt/trading-platform
             git pull --ff-only
             cd deploy
