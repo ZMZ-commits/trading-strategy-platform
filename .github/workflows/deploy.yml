@@ -39,8 +39,11 @@ jobs:
             cd /opt/trading-platform
             git pull --ff-only
             cd deploy
-            # --pull always so same-tag images (e.g. :prod sandbox) actually update.
-            docker compose up -d --pull always --remove-orphans
+            # Pull only the sandbox image (built+pushed to GHCR) so its same :prod tag
+            # actually updates. Other images are built locally on the VM (pipeline) or
+            # managed by their own repos, so we don't --pull everything.
+            docker compose pull sandbox || true
+            docker compose up -d --remove-orphans
             # Apply Caddyfile changes without dropping connections (fallback: restart).
             docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || docker compose restart caddy
             docker image prune -f
