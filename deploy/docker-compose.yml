@@ -109,29 +109,33 @@ services:
     restart: unless-stopped
     environment:
       - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
+      # publish() writes here (inside the jovyan-writable work volume); the
+      # sandbox reads the same path read-only to run published indicators.
+      - TSP_REGISTRY=/home/jovyan/work/registry
     ports:
       - "127.0.0.1:8888:8888"   # localhost-only; tunnel in via SSH
     volumes:
-      - jupyter_work:/home/jovyan/work   # notebooks persist here; NO prod data mounted
+      - jupyter_work:/home/jovyan/work   # notebooks + registry persist here; NO prod data mounted
     mem_limit: 2g
     cpus: "1.5"
     networks:
       - web
 
   # ── Sandbox (published-indicator execution) ──────────────────────
-  # PLACEHOLDER for Phase 1b: runs published compute(ctx) on demand, invoked by
-  # the backend. No worker code yet — it idles. When wired, harden further:
+  # Runs published compute(ctx) on demand, invoked by the backend (POST :9000/run).
+  # Reads the registry JupyterLab writes (read-only). TODO harden further:
   # no network egress, ephemeral-per-run (or gVisor/Firecracker), dep allowlist.
   sandbox:
-    image: python:3.11-slim
+    image: ghcr.io/zmz-commits/trading-strategy-sandbox:prod
     container_name: sandbox
     restart: unless-stopped
-    command: ["sleep", "infinity"]   # idle until the execution worker is added
+    environment:
+      - TSP_REGISTRY=/work/registry    # matches JupyterLab's /home/jovyan/work/registry
+    volumes:
+      - jupyter_work:/work:ro          # shared registry (read-only)
+    command: ["uvicorn", "tsp.worker:create_app", "--factory", "--host", "0.0.0.0", "--port", "9000"]
     mem_limit: 1g
     cpus: "1.0"
-    read_only: true
-    tmpfs:
-      - /tmp
     networks:
       - web
 
