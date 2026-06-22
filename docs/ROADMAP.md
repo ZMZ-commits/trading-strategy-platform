@@ -31,15 +31,20 @@ The end-state UX:
   Dashboard Views** (placeholder). Collapsible top/bottom panels. Chart with
   overlays + oscillator panes; ranges incl. 5D/3M/6M/YTD. Floating widget removed.
 - **Backend:** FastAPI — stocks/indicators (yfinance), strategies (file store),
-  engine execution, live-tick WebSocket.
+  engine execution, live-tick WebSocket, and **`/stocks/{ticker}/custom/{slug}`**
+  (delegates to the sandbox to run published indicators).
 - **Data:** yfinance (history/quotes) + Alpaca (live ticks via pipeline→Redis).
-- **Infra:** Hetzner VM, Docker Compose — caddy, redis, pipeline, 3 backends, and
-  now **jupyterlab** (owner-only authoring, localhost-only) + **sandbox**
-  (idle placeholder). **Infra auto-deploys** on push to `main` (deploy/**).
+- **Infra:** Hetzner VM, Docker Compose — caddy, redis, pipeline, 3 backends,
+  **jupyterlab** (owner-only authoring, localhost-only) + **sandbox** (now runs the
+  real `tsp` worker, reads the registry JupyterLab publishes to). **Infra
+  auto-deploys** on push to `main` (deploy/**), with GHCR login + sandbox image pull.
+- **`tsp` SDK + execution loop (Phase 1b) — DONE & verified end-to-end:** author
+  `compute(ctx)` → `publish()` → registry → backend `/custom` → sandbox runs it →
+  series. Verified on dev (clean 404 for an unpublished slug = chain live).
 
-**Not built yet:** the `tsp` SDK→publish→render loop, artifact save/select, the
-side-by-side authoring layout, auth, per-tab sessions (JupyterHub), Bar Replay,
-deep historical (minute-over-months) data.
+**Not built yet:** chart wiring to *render* a custom indicator (#3), artifact
+save/select + name→opens-notebook (Phase 2), side-by-side authoring layout
+(Phase 3), auth, per-tab sessions (JupyterHub), Bar Replay, deep historical data.
 
 ---
 
@@ -86,7 +91,7 @@ now) is the owner-only prototype; JupyterHub spawns per-user/per-tab kernels and
 
 ---
 
-## 5. The `tsp` SDK contract (Phase 1b — in progress)
+## 5. The `tsp` SDK contract (Phase 1b — DONE)
 
 Authoring API available in the kernel (and used by the sandbox at execution time):
 - `ctx.open/high/low/close/volume` — exported OHLCV metrics (pandas Series)
@@ -115,7 +120,8 @@ This is visual backtesting. Needs the **deep historical data** (§3) for intrada
 | Phase | Delivers | Requirements | Depends on |
 |-------|----------|--------------|------------|
 | **1a** | Jupyter + sandbox containers, infra auto-deploy | — | ✅ **done** |
-| **1b** | `tsp` SDK → publish → sandbox → render on chart (owner-only) | core loop | 1a |
+| **1b** | `tsp` SDK → publish → sandbox → backend `/custom` (owner-only) | core loop | ✅ **done** (verified on dev) |
+| **#3** | UI wiring: *render* a published custom indicator on the chart | render | 🔜 **next** |
 | **2** | Artifact store; name-on-`+` opens seeded notebook; save; select/re-open; real sidebar lists | 1, 2 | 1b |
 | **3** | Side-by-side layout: notebook (left) / chart (right) | 4 | 2 |
 | **4** | Auth (login); anonymous can preview, must log in to publish/save | 5 | 2 |
