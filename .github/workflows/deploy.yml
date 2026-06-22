@@ -26,8 +26,12 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: deploy
           key: ${{ secrets.SSH_KEY }}
+          envs: GHCR_TOKEN
           script: |
             set -e
+            # Refresh GHCR credentials (stale creds otherwise cause "denied" even on
+            # public images). Needed to pull the sandbox image.
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u zmz-commits --password-stdin
             # Ensure the deploy user owns the repo (it may have been cloned as root),
             # otherwise git pull can't write .git. deploy has passwordless sudo.
             sudo chown -R deploy:deploy /opt/trading-platform 2>/dev/null || true
@@ -39,3 +43,5 @@ jobs:
             # Apply Caddyfile changes without dropping connections (fallback: restart).
             docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || docker compose restart caddy
             docker image prune -f
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
