@@ -41,6 +41,8 @@ services:
       - CORS_ORIGINS=https://trading.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
+      - JUPYTER_URL=http://jupyterlab:8888
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
     volumes:
       - /data/prod:/data/trading-strategies
     depends_on:
@@ -56,6 +58,8 @@ services:
       - CORS_ORIGINS=https://trading-stg.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
+      - JUPYTER_URL=http://jupyterlab:8888
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
     volumes:
       - /data/stg:/data/trading-strategies
     depends_on:
@@ -71,6 +75,8 @@ services:
       - CORS_ORIGINS=https://trading-dev.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
+      - JUPYTER_URL=http://jupyterlab:8888
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
     volumes:
       - /data/dev:/data/trading-strategies
     depends_on:
