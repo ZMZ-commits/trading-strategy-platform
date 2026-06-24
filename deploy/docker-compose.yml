@@ -41,8 +41,6 @@ services:
       - CORS_ORIGINS=https://trading.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
-      - JUPYTER_URL=http://jupyterlab:8888
-      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
     volumes:
       - /data/prod:/data/trading-strategies
     depends_on:
@@ -58,8 +56,6 @@ services:
       - CORS_ORIGINS=https://trading-stg.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
-      - JUPYTER_URL=http://jupyterlab:8888
-      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
     volumes:
       - /data/stg:/data/trading-strategies
     depends_on:
@@ -75,8 +71,6 @@ services:
       - CORS_ORIGINS=https://trading-dev.zemingzhang.com
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
-      - JUPYTER_URL=http://jupyterlab:8888
-      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
     volumes:
       - /data/dev:/data/trading-strategies
     depends_on:
@@ -102,26 +96,24 @@ services:
       - backend-stg
       - backend-dev
 
-  # ── Indicator authoring (JupyterLab) ─────────────────────────────
-  # Owner-only Python environment for prototyping custom indicators.
-  # SECURITY: JupyterLab is arbitrary code execution. By default it is bound to
-  # localhost on the VM (NOT internet-exposed) — reach it via an SSH tunnel:
-  #   ssh -L 8888:127.0.0.1:8888 deploy@<vm-ip>   then open http://localhost:8888
-  # Set a token in deploy/.env (NOT committed):  JUPYTER_TOKEN=...
-  # To expose it publicly instead, see the commented lab.* block in Caddyfile.
-  jupyterlab:
-    image: jupyter/scipy-notebook:latest
-    container_name: jupyterlab
+  # ── Web IDE (code-server — VS Code in the browser) ───────────────
+  # Owner-only full IDE for authoring strategies/indicators. Bound to localhost
+  # on the VM (NOT internet-exposed) — reach it via an SSH tunnel:
+  #   ssh -L 8080:127.0.0.1:8080 deploy@<vm-ip>   then open http://localhost:8080
+  # Set a password in deploy/.env (NOT committed):  CODE_SERVER_PASSWORD=...
+  code-server:
+    image: codercom/code-server:latest
+    container_name: code-server
     restart: unless-stopped
     environment:
-      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
-      # publish() writes here (inside the jovyan-writable work volume); the
-      # sandbox reads the same path read-only to run published indicators.
-      - TSP_REGISTRY=/home/jovyan/work/registry
+      - PASSWORD=${CODE_SERVER_PASSWORD:-}
+      # publish() (run from the IDE terminal) writes here; the sandbox reads the
+      # same path read-only to run published indicators.
+      - TSP_REGISTRY=/home/coder/project/registry
     ports:
-      - "127.0.0.1:8888:8888"   # localhost-only; tunnel in via SSH
+      - "127.0.0.1:8080:8080"   # localhost-only; tunnel in via SSH
     volumes:
-      - jupyter_work:/home/jovyan/work   # notebooks + registry persist here; NO prod data mounted
+      - workspace:/home/coder/project   # your project + registry; NO prod data mounted
     mem_limit: 2g
     cpus: "1.5"
     networks:
@@ -136,9 +128,9 @@ services:
     container_name: sandbox
     restart: unless-stopped
     environment:
-      - TSP_REGISTRY=/work/registry    # matches JupyterLab's /home/jovyan/work/registry
+      - TSP_REGISTRY=/work/registry    # matches code-server's /home/coder/project/registry
     volumes:
-      - jupyter_work:/work:ro          # shared registry (read-only)
+      - workspace:/work:ro             # shared registry (read-only)
     command: ["uvicorn", "tsp.worker:create_app", "--factory", "--host", "0.0.0.0", "--port", "9000"]
     mem_limit: 1g
     cpus: "1.0"
@@ -152,4 +144,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
-  jupyter_work:
+  workspace:
