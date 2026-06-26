@@ -17,7 +17,26 @@ api-dev.zemingzhang.com {
     encode gzip
 }
 
+# ── Web IDE (code-server) ───────────────────────────────────────
+# Public HTTPS endpoint for the VS Code web IDE. ⚠️ This is a shell / arbitrary
+# code-execution server — it is protected ONLY by CODE_SERVER_PASSWORD. Use a
+# strong password (and consider adding `basicauth` below as a second lock).
+# Requires DNS: ide.zemingzhang.com -> VM IP.
+# The header block strips X-Frame-Options and sets frame-ancestors so the app
+# can embed it in an iframe (the side-by-side IDE).
+ide.zemingzhang.com {
+    reverse_proxy code-server:8080
+    header {
+        -X-Frame-Options
+        Content-Security-Policy "frame-ancestors 'self' https://trading.zemingzhang.com https://trading-stg.zemingzhang.com https://trading-dev.zemingzhang.com http://localhost:5173"
+    }
+    # Optional second lock (recommended). Generate a hash with `caddy hash-password`
+    # then uncomment:
+    # basicauth {
+    #     <user> <bcrypt-hash>
+    # }
+}
+
 # ── Frontends (React UI) ────────────────────────────────────────
 # The UI is served by Cloudflare Pages, not this VM. The trading*.zemingzhang.com
 # domains point at Cloudflare; Caddy here only proxies the APIs above.
-# (The code-server web IDE is localhost-only on the VM; reach it via SSH tunnel.)
