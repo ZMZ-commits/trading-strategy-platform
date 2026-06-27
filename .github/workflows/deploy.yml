@@ -26,7 +26,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: deploy
           key: ${{ secrets.SSH_KEY }}
-          envs: GHCR_TOKEN
+          envs: GHCR_TOKEN,CODE_SERVER_PASSWORD
           script: |
             set -e
             # Refresh GHCR credentials (stale creds otherwise cause "denied" even on
@@ -49,3 +49,6 @@ jobs:
             docker image prune -f
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # code-server password (so its public endpoint is protected); set via:
+          #   gh secret set CODE_SERVER_PASSWORD --repo ZMZ-commits/trading-strategy-platform
+          CODE_SERVER_PASSWORD: ${{ secrets.CODE_SERVER_PASSWORD }}
