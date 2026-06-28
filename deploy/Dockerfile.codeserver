@@ -1,0 +1,31 @@
+# code-server (VS Code in the browser), themed dark + Claude Code CLI preinstalled.
+#
+# Recent code-server bundles GitHub Copilot Chat as a built-in (sign in with
+# GitHub to use it). We additionally install Anthropic's Claude Code CLI so the
+# integrated terminal has an agent too: run `claude`, then `/login`.
+#
+# A default dark color theme is seeded into the user settings so the editor opens
+# in dark mode. Auth + settings persist via the coder_home volume (see
+# docker-compose.yml), so the theme and your sign-in survive container recreates.
+FROM codercom/code-server:latest
+
+USER root
+
+# Node.js (Claude Code needs >=18) + the Claude Code CLI, installed globally so
+# `claude` is on PATH for the coder user.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Seed a dark default theme into the user settings. This is copied into a fresh
+# coder_home volume on first run; once the volume exists, the user's own settings
+# win, so this only sets the initial default.
+RUN mkdir -p /home/coder/.local/share/code-server/User \
+    && printf '%s' '{"workbench.colorTheme":"Default Dark Modern"}' \
+       > /home/coder/.local/share/code-server/User/settings.json \
+    && chown -R coder:coder /home/coder/.local
+
+USER coder

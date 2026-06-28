@@ -43,6 +43,9 @@ jobs:
             # actually updates. Other images are built locally on the VM (pipeline) or
             # managed by their own repos, so we don't --pull everything.
             docker compose pull sandbox || true
+            # Build the custom code-server image (code-server + Claude Code CLI).
+            # `up` alone won't rebuild after a Dockerfile change, so build explicitly.
+            docker compose build code-server
             docker compose up -d --remove-orphans
             # Apply Caddyfile changes. The Caddyfile is bind-mounted as a single FILE,
             # and `git pull` replaces it by writing a new file + rename (new inode).
