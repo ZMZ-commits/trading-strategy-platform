@@ -1,0 +1,22 @@
+# code-server (VS Code in the browser) + Claude Code CLI preinstalled.
+#
+# Plain code-server ships no AI agent, and its Open VSX marketplace can't install
+# GitHub Copilot. We add Anthropic's Claude Code CLI so the integrated terminal
+# has an agent: open a terminal and run `claude`, then `/login` (subscription).
+#
+# Auth + settings persist via the coder_home volume (see docker-compose.yml), so
+# you only log in once even though the container is recreated on deploys.
+FROM codercom/code-server:latest
+
+USER root
+
+# Node.js (Claude Code needs >=18) + the Claude Code CLI, installed globally so
+# `claude` is on PATH for the coder user.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+USER coder

@@ -97,12 +97,16 @@ services:
       - backend-dev
 
   # ── Web IDE (code-server — VS Code in the browser) ───────────────
-  # Owner-only full IDE for authoring strategies/indicators. Bound to localhost
-  # on the VM (NOT internet-exposed) — reach it via an SSH tunnel:
-  #   ssh -L 8080:127.0.0.1:8080 deploy@<vm-ip>   then open http://localhost:8080
-  # Set a password in deploy/.env (NOT committed):  CODE_SERVER_PASSWORD=...
+  # Owner-only full IDE for authoring strategies/indicators, plus the Claude Code
+  # CLI as an in-terminal AI agent (run `claude`, then `/login`). Built from
+  # Dockerfile.codeserver. Published publicly at https://ide.zemingzhang.com via
+  # Caddy (host port stays bound to localhost); guarded by CODE_SERVER_PASSWORD.
+  # Set the password in deploy/.env (NOT committed):  CODE_SERVER_PASSWORD=...
   code-server:
-    image: codercom/code-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.codeserver
+    image: trading-code-server:latest   # locally-built tag (see Dockerfile.codeserver)
     container_name: code-server
     restart: unless-stopped
     environment:
@@ -111,8 +115,11 @@ services:
       # same path read-only to run published indicators.
       - TSP_REGISTRY=/home/coder/project/registry
     ports:
-      - "127.0.0.1:8080:8080"   # localhost-only; tunnel in via SSH
+      - "127.0.0.1:8080:8080"   # localhost-only on the host; public via Caddy
     volumes:
+      # Persist the whole home dir so VS Code settings/extensions AND the Claude
+      # Code login survive container recreates (deploys recreate this container).
+      - coder_home:/home/coder
       - workspace:/home/coder/project   # your project + registry; NO prod data mounted
     mem_limit: 2g
     cpus: "1.5"
@@ -145,3 +152,4 @@ volumes:
   caddy_data:
   caddy_config:
   workspace:
+  coder_home:   # code-server home: settings, extensions, Claude Code login
