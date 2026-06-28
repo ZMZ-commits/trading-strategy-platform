@@ -44,8 +44,14 @@ jobs:
             # managed by their own repos, so we don't --pull everything.
             docker compose pull sandbox || true
             docker compose up -d --remove-orphans
-            # Apply Caddyfile changes without dropping connections (fallback: restart).
-            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || docker compose restart caddy
+            # Apply Caddyfile changes. The Caddyfile is bind-mounted as a single FILE,
+            # and `git pull` replaces it by writing a new file + rename (new inode).
+            # A single-file bind mount stays pinned to the ORIGINAL inode, so neither
+            # `caddy reload` nor `docker compose restart caddy` (same container = same
+            # stale mount) ever sees the updated file. Only RECREATING the container
+            # re-resolves the bind mount to the current host file. Brief blip, but it's
+            # the only thing that actually applies Caddyfile changes.
+            docker compose up -d --force-recreate caddy
             docker image prune -f
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
