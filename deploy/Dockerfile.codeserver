@@ -29,3 +29,10 @@ RUN mkdir -p /home/coder/.local/share/code-server/User \
     && chown -R coder:coder /home/coder/.local
 
 USER coder
+
+# Open the clean project workspace by default instead of "." (= /home/coder,
+# which would expose ~/.cache, ~/.config, ~/.local, dotfiles). Same upstream
+# entrypoint, only the opened folder changes. The project/strategies and
+# project/indicators folders + ownership are ensured by the deploy step (the
+# workspace volume is mounted at runtime and shadows anything baked here).
+ENTRYPOINT ["/usr/bin/entrypoint.sh", "--bind-addr", "0.0.0.0:8080", "/home/coder/project"]

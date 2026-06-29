@@ -47,6 +47,11 @@ jobs:
             # `up` alone won't rebuild after a Dockerfile change, so build explicitly.
             docker compose build code-server
             docker compose up -d --remove-orphans
+            # Ensure the IDE workspace structure exists and is writable. The
+            # workspace volume mounts at /home/coder/project as root-owned, so
+            # the coder user can't create files there until we fix it. Seed the
+            # strategies/ and indicators/ folders too.
+            docker exec -u root code-server sh -c 'mkdir -p /home/coder/project/strategies /home/coder/project/indicators && chown -R coder:coder /home/coder/project' || true
             # Apply Caddyfile changes. The Caddyfile is bind-mounted as a single FILE,
             # and `git pull` replaces it by writing a new file + rename (new inode).
             # A single-file bind mount stays pinned to the ORIGINAL inode, so neither
