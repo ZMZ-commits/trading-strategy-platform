@@ -60,7 +60,9 @@ jobs:
             # re-resolves the bind mount to the current host file. Brief blip, but it's
             # the only thing that actually applies Caddyfile changes.
             docker compose up -d --force-recreate caddy
-            docker image prune -f
+            # Non-fatal: a concurrent deploy may hold the prune lock ("a prune
+            # operation is already running"); don't fail the deploy over cleanup.
+            docker image prune -f || true
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # code-server password (so its public endpoint is protected); set via:
