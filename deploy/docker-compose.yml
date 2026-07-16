@@ -42,9 +42,11 @@ services:
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
       - IDE_WORKSPACE=/workspace
+      - DATASET_ROOT=/data/datasets
     volumes:
       - /data/prod:/data/trading-strategies
       - workspace:/workspace   # shared code-server workspace (scaffold strategies/indicators)
+      - dataset_prod:/data/datasets   # Lab Platform: pulled OHLCV datasets + backtest results
     depends_on:
       - redis
     networks:
@@ -59,9 +61,11 @@ services:
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
       - IDE_WORKSPACE=/workspace
+      - DATASET_ROOT=/data/datasets
     volumes:
       - /data/stg:/data/trading-strategies
       - workspace:/workspace   # shared code-server workspace (scaffold strategies/indicators)
+      - dataset_stg:/data/datasets   # Lab Platform: pulled OHLCV datasets + backtest results
     depends_on:
       - redis
     networks:
@@ -76,9 +80,11 @@ services:
       - STORE_ROOT=/data/trading-strategies
       - REDIS_URL=redis://redis:6379
       - IDE_WORKSPACE=/workspace
+      - DATASET_ROOT=/data/datasets
     volumes:
       - /data/dev:/data/trading-strategies
       - workspace:/workspace   # shared code-server workspace (scaffold strategies/indicators)
+      - dataset_dev:/data/datasets   # Lab Platform: pulled OHLCV datasets + backtest results
     depends_on:
       - redis
     networks:
@@ -159,3 +165,6 @@ volumes:
   caddy_config:
   workspace:
   coder_home:   # code-server home: settings, extensions, Claude Code login
+  dataset_prod: # Lab Platform pulled datasets + backtest results (prod)
+  dataset_stg:  # same, staging
+  dataset_dev:  # same, dev
