@@ -13,6 +13,22 @@ Monorepo hub for the trading strategy application. Source code lives in four sub
 Each long-lived branch auto-deploys its own environment on push. `feature/*`
 branches are never deployed — test those locally with `docker compose up`.
 
+## Design doc
+
+**[Trading Platform Blueprint](https://trading.zemingzhang.com/design-doc)** — the
+architecture, the design principles, and an honest account of what is built
+against what is still on paper.
+
+It covers the machine-by-machine system design at service granularity, tenancy,
+the data pipeline and watermark model, the observability stack, capacity and
+cost. Every component carries a badge saying whether it exists today, needs
+changing, or has not been started.
+
+The same page is reachable from inside the app: the book icon in the left rail,
+below VS Code. It is served by the front end itself, so it deploys and versions
+with the UI rather than living somewhere separate.
+
+
 ### Repositories
 
 - [trading-strategy-platform](https://github.com/ZMZ-commits/trading-strategy-platform) — infrastructure, deployment, cross-repo docs
