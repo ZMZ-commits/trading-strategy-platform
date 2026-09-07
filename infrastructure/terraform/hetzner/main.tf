@@ -121,12 +121,37 @@ resource "hcloud_server" "k3s" {
   }
 }
 
+# Anything that must survive lives here, not on the server's boot disk.
+#
+# The distinction matters more than it sounds. Terraform destroys a server not
+# only on `terraform destroy` but whenever an immutable attribute changes --
+# edit `image` or `location` and the plan says "replace", which means destroy.
+# The boot disk goes with it. This volume does not: it detaches, waits, and
+# reattaches to the new machine.
+#
+# Treat the server as disposable and the volume as the thing you are protecting.
 resource "hcloud_volume" "data" {
-  count             = var.data_volume_gb > 0 ? 1 : 0
-  name              = "${var.cluster_name}-data"
-  size              = var.data_volume_gb
-  server_id         = hcloud_server.k3s.id
-  automount         = true
-  format            = "ext4"
-  delete_protection = true
+  count     = var.data_volume_gb > 0 ? 1 : 0
+  name      = "${var.cluster_name}-data"
+  size      = var.data_volume_gb
+  server_id = hcloud_server.k3s.id
+  automount = true
+  format    = "ext4"
+
+  # No delete_protection and no prevent_destroy, deliberately: the volume is
+  # empty and a locked resource in a cluster you are still learning to build is
+  # an obstacle, not a safeguard. The reviewer gate on the apply job is the
+  # protection for now.
+  #
+  # Two things to know about relying on that:
+  #
+  #   - It only covers CI. A `terraform destroy` from a laptop never meets a
+  #     reviewer.
+  #   - Turn both flags back on the day this volume holds something you would
+  #     miss. That day arrives quietly, usually the first time a bot writes a
+  #     trade record here.
+  #
+  # The planned next layer is a snapshot taken by CI immediately before apply,
+  # tagged with the commit, so a bad plan is recoverable rather than merely
+  # visible.
 }
