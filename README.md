@@ -76,7 +76,14 @@ Active development branch: `claude/serene-euler-Gq1ma`
 
 ## Infrastructure
 
-Terraform configs for AWS (EC2 + ECR + S3 + CloudFront) live in `infrastructure/terraform/`. See `DEPLOY_AWS.md` for the full deploy guide.
+Terraform lives in `infrastructure/terraform/`, split into two stacks that are
+applied in order:
+
+- `hetzner/` — provisions the server, network and firewall, and installs k3s
+- `k8s/` — installs Strimzi and Kafka into the cluster the first stack built
+
+They are separate because the Helm provider needs a kubeconfig that does not
+exist until the cluster does. One combined apply fails at plan time.
 
 ## Local Dev (all services)
 

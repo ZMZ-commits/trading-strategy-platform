@@ -116,9 +116,18 @@ flowchart TB
 | **Caddy** | Hetzner VM, ports 80/443 | `deploy/Caddyfile` — automatic Let's Encrypt HTTPS |
 | **Engine** | nowhere (library) | `pip install` from git, pinned in the backend's `requirements.txt` |
 
-The platform repo's `infrastructure/terraform/` holds an **alternative AWS**
-topology (EC2 + ECR + S3 + CloudFront) — see `DEPLOY_AWS.md`. The **live**
-deployment is the Hetzner + Cloudflare path described above.
+The platform repo's `infrastructure/terraform/` holds two stacks, applied in
+order: `hetzner/` provisions a server, network and firewall and installs k3s;
+`k8s/` then installs Strimzi and Kafka into it through the Helm provider. They
+are separate because the Helm provider needs a kubeconfig that does not exist
+until the cluster does — a single combined apply fails at plan time.
+
+This is **new infrastructure for the streaming work**, not how the current
+services are deployed. The live path is still the Hetzner VM plus Cloudflare
+described above, driven by `docker compose` over SSH. An AWS topology
+(EC2 + ECR + S3 + CloudFront) used to live here; it was never applied and has
+been removed rather than left to rot as a second answer to a question that
+already has one.
 
 ### Environments → URLs
 
@@ -204,7 +213,8 @@ The platform repo is the orchestration + infra layer. Key files:
 | `deploy/bootstrap.sh` | One-shot fresh-VM setup (Docker, UFW, data dirs, clone) |
 | `deploy/redeploy.sh` | Rebuild/redeploy backends + pipeline from source on the VM |
 | `docker-compose.yml` (root) | Local integration: backend + UI together |
-| `infrastructure/terraform/` | Alternative AWS topology (EC2/ECR/S3/CloudFront) |
+| `infrastructure/terraform/hetzner/` | Server, network, firewall, k3s |
+| `infrastructure/terraform/k8s/` | Strimzi + Kafka, via the Helm provider |
 | `scripts/setup-submodules.sh` | Wire sub-repos as git submodules under `packages/` |
 | `scripts/update-submodules.sh` | Pull latest for all submodules + commit pointers |
 
