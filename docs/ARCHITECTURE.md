@@ -117,10 +117,19 @@ flowchart TB
 | **Engine** | nowhere (library) | `pip install` from git, pinned in the backend's `requirements.txt` |
 
 The platform repo's `infrastructure/terraform/` holds two stacks, applied in
-order: `hetzner/` provisions a server, network and firewall and installs k3s;
-`k8s/` then installs Strimzi and Kafka into it through the Helm provider. They
-are separate because the Helm provider needs a kubeconfig that does not exist
-until the cluster does — a single combined apply fails at plan time.
+order: `hetzner/` builds the private network and firewall and installs k3s on
+four existing machines; `k8s/` then installs Strimzi and Kafka into the result
+through the Helm provider. They are separate because the Helm provider needs a
+kubeconfig that does not exist until the cluster does — a single combined apply
+fails at plan time.
+
+The servers themselves are read through `data` sources, never created. A data
+source has no destroy verb, so no plan can produce one that deletes a machine —
+which matters because Hetzner currently lists every cx23 as unavailable, and a
+released box may not come back. k3s is installed by a `remote-exec` provisioner
+rather than cloud-init, since cloud-init runs only at first boot and these
+machines were already up. See
+[`infrastructure/terraform/README.md`](../infrastructure/terraform/README.md).
 
 This is **new infrastructure for the streaming work**, not how the current
 services are deployed. The live path is still the Hetzner VM plus Cloudflare
@@ -215,11 +224,10 @@ The platform repo is the orchestration + infra layer. Key files:
 | `docker-compose.yml` (root) | Local integration: backend + UI together |
 | `infrastructure/terraform/hetzner/` | Server, network, firewall, k3s |
 | `infrastructure/terraform/k8s/` | Strimzi + Kafka, via the Helm provider |
-| `scripts/setup-submodules.sh` | Wire sub-repos as git submodules under `packages/` |
+
 | `scripts/update-submodules.sh` | Pull latest for all submodules + commit pointers |
 
 ### ⚠️ Known documentation drift (fix when touched)
-- `scripts/setup-submodules.sh` and `.gitmodules` still pin the old branch
   `claude/serene-euler-Gq1ma`; the model is now `dev`/`staging`/`main`.
 - `deploy/redeploy.sh` maps `dev → deployment` branch; the branch is now `dev`.
 - `README.md` "Branching Model" says 4-tier `feature → deployment → staging →

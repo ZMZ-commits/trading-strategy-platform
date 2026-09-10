@@ -103,15 +103,21 @@ resource "kubectl_manifest" "kafka" {
           },
         ]
         config = {
-          # Single node, so nothing can be replicated. Stated explicitly
-          # because the defaults assume three brokers and a Kafka that cannot
-          # satisfy its own defaults simply refuses to start, with an error
-          # that does not mention replication.
-          "offsets.topic.replication.factor"         = 1
-          "transaction.state.log.replication.factor" = 1
-          "transaction.state.log.min.isr"            = 1
-          "default.replication.factor"               = 1
-          "min.insync.replicas"                      = 1
+          # Every partition on all three brokers, and a write is only
+          # acknowledged once two of them hold it. That is what survives losing
+          # a node: the third broker is missing, two still have the data, and
+          # producers carry on.
+          #
+          # min.insync.replicas of 2 rather than 3 is the whole point. At 3 a
+          # single broker restart -- an upgrade, a reschedule -- stops writes
+          # dead, because the cluster cannot satisfy its own durability rule.
+          # At 2 it tolerates one absence and still refuses to accept a write
+          # that only one broker has seen.
+          "offsets.topic.replication.factor"         = var.broker_count
+          "transaction.state.log.replication.factor" = var.broker_count
+          "transaction.state.log.min.isr"            = var.broker_count > 1 ? 2 : 1
+          "default.replication.factor"               = var.broker_count
+          "min.insync.replicas"                      = var.broker_count > 1 ? 2 : 1
         }
       }
       entityOperator = { topicOperator = {}, userOperator = {} }
@@ -131,14 +137,36 @@ resource "kubectl_manifest" "node_pool" {
       labels    = { "strimzi.io/cluster" = var.kafka_name }
     }
     spec = {
-      replicas = 1
+      replicas = var.broker_count
       roles    = ["controller", "broker"]
+
+      # One broker per node. Three brokers sharing a machine is three brokers
+      # lost at once, which is the failure this whole arrangement exists to
+      # survive -- and Strimzi will happily stack them without being told not to.
+      template = {
+        pod = {
+          affinity = {
+            podAntiAffinity = {
+              requiredDuringSchedulingIgnoredDuringExecution = [{
+                labelSelector = {
+                  matchExpressions = [{
+                    key      = "strimzi.io/name"
+                    operator = "In"
+                    values   = ["${var.kafka_name}-kafka"]
+                  }]
+                }
+                topologyKey = "kubernetes.io/hostname"
+              }]
+            }
+          }
+        }
+      }
       storage = {
         type = "jbod"
         volumes = [{
-          id          = 0
-          type        = "persistent-claim"
-          size        = var.broker_storage
+          id   = 0
+          type = "persistent-claim"
+          size = var.broker_storage
           # Kafka's whole point is that messages survive a restart. An
           # ephemeral volume gives you a queue that forgets, which is the one
           # thing you already had in Redis.
@@ -167,10 +195,13 @@ resource "kubectl_manifest" "trades_topic" {
       # symbol always lands the same symbol on the same partition, and a bar
       # built from out-of-order ticks has the wrong high and low.
       partitions = var.topic_partitions
-      replicas   = 1
+      # Every partition on every broker. Replicas cannot exceed brokers, and a
+      # topic replicated once on a three-broker cluster is a topic that dies
+      # with one machine, on a cluster built so that it would not.
+      replicas = var.broker_count
       config = {
-        "retention.ms"    = var.retention_days * 24 * 60 * 60 * 1000
-        "cleanup.policy"  = "delete"
+        "retention.ms"     = var.retention_days * 24 * 60 * 60 * 1000
+        "cleanup.policy"   = "delete"
         "compression.type" = "producer"
       }
     }

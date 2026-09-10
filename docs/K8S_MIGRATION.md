@@ -68,12 +68,38 @@ rather than committed anywhere.
 
 Each phase leaves a working system. Stop at the end of any of them.
 
-### 1 — Cluster exists
+### 1 — Cluster exists ✅ done
 
-Apply `infrastructure/terraform/hetzner`. A new server, not the one running
-production.
+Four cx23 machines, none of them the one running production:
 
-*Done when:* `kubectl get nodes` answers from your laptop.
+| Node | `tsp.role` | Private IP | Allocatable |
+|---|---|---|---|
+| `trading-platform-2` | `intake` | 10.0.1.10 | 1.9 GB |
+| `trading-platform-3` | `data` | 10.0.1.11 | 2.4 GB |
+| `trading-platform-4` | `stream` | 10.0.1.12 | 2.4 GB |
+| `trading-platform-5` | `observability` | 10.0.1.13 | 2.4 GB |
+
+One k3s server and three agents — **not** a quorum control plane. Three servers
+running embedded etcd costs ~2 GB per node, which on 4 GB machines is half the
+box spent on surviving the loss of a box. Revisit when the nodes are bigger.
+
+`terraform apply` does all of it: attaches the private network, applies the
+firewall, and installs k3s over SSH with the right label and kubelet
+reservations. Adding a node is one line in `agent_roles`.
+
+**The reservations matter more than they look.** k3s sets none by default, so a
+full node lets the OOM killer choose its victim by score — which can be the
+kubelet, taking the node `NotReady` and evicting everything on it. Reserved, the
+worst case is a pod restarting.
+
+**Budget honestly: ~1.5 GB per node.** These boxes report 3814 MB, not 4096, so
+the cluster has **~9.1 GB allocatable in total** — not the ~14.5 GB a
+back-of-envelope "4 × 4 GB minus overhead" suggests. Every placement decision
+downstream is against 9.1 GB.
+
+*Done when:* `kubectl get nodes -L tsp.role` shows four Ready nodes from your
+laptop, and `kubectl describe node | grep -A6 Allocatable` shows capacity minus
+the reservation rather than the full machine.
 
 ### 2 — Remote state
 
