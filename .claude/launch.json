@@ -2,23 +2,56 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "Frontend (Vite dev server)",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "cwd": "../trading-strategy-ui",
+      "name": "Design doc (static preview)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8123",
+        "--directory",
+        "F:/Projects/trading-strategy-ui/public"
+      ],
+      "cwd": ".",
+      "port": 8123
+    },
+    {
+      "name": "UI Preview (Docker, no local Node)",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "run",
+        "--rm",
+        "--name",
+        "tsp-ui-preview",
+        "-p",
+        "5173:5173",
+        "-v",
+        "F:/Projects/trading-strategy-ui:/app",
+        "-v",
+        "tsp_ui_nm:/app/node_modules",
+        "-w",
+        "/app",
+        "node:20-alpine",
+        "npm",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "cwd": ".",
       "port": 5173
     },
     {
-      "name": "Backend (FastAPI + uvicorn)",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
-      "cwd": "../trading-strategy-backend",
-      "port": 8000
-    },
-    {
       "name": "Full Stack (Docker Compose)",
-      "runtimeExecutable": "docker-compose",
-      "runtimeArgs": ["up", "--build"],
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "compose",
+        "up",
+        "--build"
+      ],
       "cwd": ".",
       "port": 5173
     }

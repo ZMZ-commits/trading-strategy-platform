@@ -30,7 +30,7 @@ terraform {
       # Cloudflare dashboard -> R2 -> the account id is in the right sidebar,
       # and in the S3 API endpoint it shows you. Not a credential -- it is an
       # identifier, and it appears in every request URL.
-      s3 = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
+      s3 = "https://6ca4b7fdec05454e6f55567122735dca.r2.cloudflarestorage.com"
     }
 
     # Locking. Terraform writes <key>.tflock with an If-None-Match conditional
