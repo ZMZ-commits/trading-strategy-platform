@@ -41,31 +41,58 @@ reasonable hack for DNS records. It is not one for a volume with a database on
 it: a silently skipped import means Terraform concludes the resource is missing
 and creates another.
 
-**Use HCP Terraform's free tier.** It does encrypted state with locking, needs no
-infrastructure of its own, and takes about ten minutes.
+**Using Cloudflare R2.** The free tier is 10 GB, this file is ~50 KB, and you
+already have a Cloudflare account for Pages and DNS.
 
-1. Sign up at <https://app.terraform.io>, create an organisation.
-2. Add this to `hetzner/backend.tf`:
+### Setup
 
-   ```hcl
-   terraform {
-     cloud {
-       organization = "<your-org>"
-       workspaces { name = "tsp-hetzner" }
-     }
-   }
+1. **Enable R2**: Cloudflare dashboard -> R2 -> Get Started. Cloudflare asks for
+   a payment method to enable it even on the free tier; nothing is charged
+   within the free limits, but the card is required to turn it on. If that is a
+   dealbreaker, HCP Terraform's free tier does the same job with no card.
+
+2. **Create the bucket**, named `tsp-tfstate`. Location Automatic is fine.
+
+3. **Create credentials**: R2 -> API -> Manage API Tokens -> Create Account API
+   token, **Object Read & Write**, scoped to that bucket. You get an Access Key
+   ID and a Secret Access Key, shown once.
+
+4. **Activate the backend**:
+
+   ```bash
+   cd hetzner
+   mv backend.tf.example backend.tf
    ```
 
-3. Locally: `terraform login`, then `terraform init -migrate-state`. This uploads
-   what is currently on your disk and switches over.
-4. Set the workspace's execution mode to **Local** — you want HCP for state and
-   locking, and GitHub Actions for running. Remote execution would need every
-   variable configured there instead, in a second place.
-5. Create an API token (HCP → User settings → Tokens) and add it as the
-   `TF_API_TOKEN` repository secret.
+   Edit it and replace `<ACCOUNT_ID>` with your Cloudflare account id -- it is in
+   the R2 sidebar, and in the S3 endpoint it shows you. Not a credential; it
+   appears in every request URL.
 
-Two `terraform plan` runs from different machines agreeing is how you know it
-took.
+5. **Migrate**:
+
+   ```bash
+   export AWS_ACCESS_KEY_ID=<r2 access key id>
+   export AWS_SECRET_ACCESS_KEY=<r2 secret>
+   terraform init -migrate-state
+   ```
+
+   This uploads the state on your disk and switches over. Say yes when it asks.
+
+6. **Verify locking actually works.** In two terminals at once:
+
+   ```bash
+   terraform plan
+   ```
+
+   The second should report `Error acquiring the state lock`. If both run
+   happily, R2 is not honouring the conditional write and you have no locking --
+   which is survivable with one operator and not survivable with CI, because two
+   overlapping applies can interleave writes and leave state describing
+   infrastructure that never existed.
+
+   Verify this rather than assuming it. R2's docs say `PutObject` supports
+   conditional headers, which is the mechanism `use_lockfile` relies on, but the
+   only proof is the test above.
 
 **Do not put state in MinIO.** MinIO will run inside the cluster this stack
 builds, so Terraform would need the cluster to exist in order to find out whether
@@ -82,7 +109,8 @@ Settings → Secrets and variables → Actions.
 | `HCLOUD_TOKEN` | Hetzner API token, Read & Write | Full control of the account |
 | `ADMIN_CIDRS` | JSON list, e.g. `["203.0.113.4/32"]` | Must be a **JSON array**, not a bare IP |
 | `CLUSTER_SSH_PRIVATE_KEY` | private half of `~/.ssh/hetzner` | Whole file, including the BEGIN/END lines |
-| `TF_API_TOKEN` | HCP Terraform token | Only if using the `cloud` backend above |
+| `AWS_ACCESS_KEY_ID` | R2 access key id | Named for the S3 protocol, not for AWS |
+| `AWS_SECRET_ACCESS_KEY` | R2 secret access key | Shown once when the token is created |
 
 `ADMIN_CIDRS` is the one that will catch you out. Terraform reads `TF_VAR_*` for
 a `list(string)` as HCL, so `203.0.113.4/32` fails and `["203.0.113.4/32"]`

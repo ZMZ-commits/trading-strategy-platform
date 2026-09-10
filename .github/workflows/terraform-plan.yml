@@ -32,6 +32,13 @@ jobs:
       run:
         working-directory: infrastructure/terraform/hetzner
 
+    # The S3 backend reads R2 credentials from the environment, and every step
+    # that touches state needs them -- init, plan and apply alike. Named for the
+    # S3 protocol, not for AWS; nothing here talks to Amazon.
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
