@@ -1,4 +1,10 @@
-# Apply on merge to a long-lived branch, behind a required reviewer.
+# Apply infrastructure changes, behind a required reviewer.
+#
+# Two jobs, and the split is the whole point. A job-level `environment:` gate is
+# evaluated BEFORE any step in that job runs, so a single gated job asks the
+# reviewer to approve before the plan exists -- they are approving a description,
+# not a diff. Planning in an ungated job first means the reviewer reads the
+# actual plan in that job's summary and then approves the apply.
 #
 # The reviewer gate is the only thing standing between a bad merge and your
 # infrastructure. `prevent_destroy` and `delete_protection` were deliberately
@@ -6,18 +12,28 @@
 # `terraform destroy` from a laptop never meets a reviewer.
 #
 # What a merge here CAN remove: the network, the firewall, the k3s install, the
-# volume, and anything in ../k8s. What it CANNOT remove: the five servers. Those
-# are `data` sources -- lookups with no destroy verb, so no plan can delete one.
+# volume. What it CANNOT remove: the five servers. Those are `data` sources --
+# lookups with no destroy verb, so no plan can delete one.
 #
 # Set up in GitHub: Settings -> Environments -> New environment "terraform-apply"
-# -> Required reviewers -> add yourself. Without that step this file applies with
-# no gate at all, which is the failure mode it exists to prevent.
+# -> Required reviewers -> add yourself. Without that step the apply job runs
+# ungated, which is the failure mode this file exists to prevent.
 
 name: Terraform Apply
 
 on:
+  # main only, deliberately.
+  #
+  # dev / staging / main are APPLICATION environments served by one set of
+  # machines. There is a single cluster and a single state file, so applying
+  # from three branches means three branches racing to define one reality: merge
+  # a change to dev, then promote an older staging, and Terraform treats the
+  # older branch as desired state and rolls the newer change back.
+  #
+  # Infrastructure has one authoritative branch. Changes still travel
+  # feature -> dev -> staging -> main for review; they just take effect once.
   push:
-    branches: [dev, staging, main]
+    branches: [main]
     paths:
       - "infrastructure/terraform/**"
       - ".github/workflows/terraform-apply.yml"
@@ -32,20 +48,22 @@ concurrency:
   group: tf-apply
   cancel-in-progress: false
 
+env:
+  # The S3 backend reads R2 credentials from the environment. Named for the S3
+  # protocol, not for AWS; nothing here talks to Amazon.
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+  TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
+
 jobs:
-  apply:
+  # ------------------------------------------------------------------- plan
+  # Ungated on purpose: this is what the reviewer reads before approving.
+  plan:
     runs-on: ubuntu-latest
-    environment: terraform-apply # <- the reviewer gate lives here
     defaults:
       run:
         working-directory: infrastructure/terraform/hetzner
-
-    # The S3 backend reads R2 credentials from the environment, and every step
-    # that touches state needs them -- init, plan and apply alike. Named for the
-    # S3 protocol, not for AWS; nothing here talks to Amazon.
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -54,77 +72,113 @@ jobs:
         with:
           terraform_version: "1.15.8"
 
-      # k3s is installed by a remote-exec provisioner, so the runner needs SSH
-      # to every node. This is the real cost of provisioner-based install: the
-      # thing that applies your infrastructure now holds root on all of it.
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Plan
+        run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
+
+      # The firewall admits SSH only from admin_cidrs. A GitHub runner is a
+      # throwaway VM on some Azure address, so any change that makes a
+      # provisioner run cannot reach the machine -- it would hang until the SSH
+      # timeout and then fail with a connection error that says nothing useful.
       #
-      # Scope the deploy key to these machines only, and rotate it if a workflow
-      # run is ever compromised.
+      # Parsed as JSON rather than grepped. Terraform represents a replacement
+      # as actions ["delete","create"], not the literal string "replace", so a
+      # pattern anchored on "create" misses exactly the case this guard exists
+      # for: a changed kubelet reservation or node label reinstalling k3s.
+      - name: Refuse changes that need SSH
+        run: |
+          terraform show -json tfplan > plan.json
+          need_ssh=$(jq '[.resource_changes[]?
+                          | select(.type == "terraform_data")
+                          | select(.change.actions | any(. == "create" or . == "delete"))]
+                         | length' plan.json)
+          echo "resources needing SSH: $need_ssh"
+          if [ "$need_ssh" -gt 0 ]; then
+            {
+              echo "### Apply blocked"
+              echo
+              echo "This plan installs or reinstalls k3s on $need_ssh node(s), which needs SSH."
+              echo "The firewall admits only \`admin_cidrs\`, and this runner is not in it."
+              echo
+              jq -r '.resource_changes[]?
+                     | select(.type == "terraform_data")
+                     | select(.change.actions | any(. == "create" or . == "delete"))
+                     | "- `" + .address + "`: " + (.change.actions | join(", "))' plan.json
+              echo
+              echo "Run it from a machine inside \`admin_cidrs\`:"
+              echo '```'
+              echo "cd infrastructure/terraform/hetzner"
+              echo "terraform plan -out=tfplan && terraform apply tfplan"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::plan needs SSH to $need_ssh node(s); apply it locally (see job summary)"
+            exit 1
+          fi
+
+      # The reviewer approves the next job based on this. Rendered from the saved
+      # plan so it is the same plan, and `terraform show` redacts values marked
+      # sensitive -- which the raw tfplan file does not, and is why that file is
+      # never uploaded as an artifact.
+      - name: Publish the plan for the reviewer
+        run: |
+          {
+            echo "### Terraform plan — \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`"
+            echo
+            echo '```terraform'
+            terraform show -no-color tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------ apply
+  # Gated. Runs only after a human has read the plan job's summary.
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: terraform-apply
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/hetzner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # Present so `file(pathexpand(var.ssh_private_key_path))` resolves at plan
+      # time. The plan job has already refused anything that would actually
+      # connect, so this is never used to reach a node from CI -- but Terraform
+      # evaluates the whole config regardless of what is changing.
       - name: Load the cluster SSH key
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.CLUSTER_SSH_PRIVATE_KEY }}" > ~/.ssh/hetzner
           chmod 600 ~/.ssh/hetzner
-          # The provisioner connects by IP; without this the host-key prompt
-          # blocks forever on a runner with no tty.
           printf 'StrictHostKeyChecking accept-new\n' >> ~/.ssh/config
 
       - name: Init
         run: terraform init -input=false
 
-      - name: Plan
-        env:
-          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
-        run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
-
-      # The firewall admits SSH only from admin_cidrs -- your home address. A
-      # GitHub runner is a throwaway VM on some Azure IP, so any change that
-      # makes a provisioner run (adding a node, editing a kubelet reservation or
-      # a node label) cannot reach the machine and would hang until the SSH
-      # timeout, then fail with a connection error that says nothing useful.
+      # Re-planned rather than applying a file handed over from the plan job.
       #
-      # Catch it here instead, before anything is written, and say what to do.
-      # Everything that touches only the Hetzner API -- firewall rules, the
-      # network, the volume -- passes straight through.
-      - name: Refuse changes that need SSH
-        run: |
-          if terraform show -json tfplan \
-             | grep -q '"type":"terraform_data"[^}]*"change":{"actions":\["create"\|"replace"'; then
-            {
-              echo "### Apply blocked"
-              echo
-              echo "This plan reinstalls or joins a k3s node, which needs SSH to the machine."
-              echo "The firewall only admits \`admin_cidrs\`, and this runner is not in it."
-              echo
-              echo "Run it from your laptop instead:"
-              echo '```'
-              echo "cd infrastructure/terraform/hetzner"
-              echo "terraform plan -out=tfplan && terraform apply tfplan"
-              echo '```'
-              echo
-              echo "To make CI able to do this, use a self-hosted runner inside the"
-              echo "Hetzner network -- see infrastructure/terraform/README.md."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::plan requires SSH to a node; apply it locally (see job summary)"
-            exit 1
-          fi
-          echo "No provisioner in this plan - safe to apply from CI."
-
-      # Applying the saved plan, not re-planning. Between plan and apply the
-      # world can move; applying a file guarantees what ran is what the gate
-      # approved.
+      # A saved plan would guarantee that what runs is exactly what was reviewed,
+      # which is the better property -- but the tfplan file embeds every variable
+      # value it was planned with, the API token included, and an artifact is
+      # readable by anyone with repo access while a secret is not. Between
+      # leaking the token and a small window where state could move, the window
+      # is the lesser problem: the state lock and `tf-apply` concurrency mean the
+      # only thing that can move it is a human running apply by hand, right now.
       - name: Apply
-        env:
-          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
-        run: terraform apply -no-color -input=false -lock-timeout=5m tfplan
+        run: terraform apply -no-color -input=false -lock-timeout=5m -auto-approve
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### Terraform apply — \`${{ github.ref_name }}\`"
+            echo "### Applied — \`${{ github.ref_name }}\`"
             echo
             terraform output -no-color 2>/dev/null | grep -Ev 'BEGIN|END|^\s' || true
           } >> "$GITHUB_STEP_SUMMARY"

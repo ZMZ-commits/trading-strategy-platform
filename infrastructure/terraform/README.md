@@ -149,18 +149,57 @@ console — that one is enforced by the API and refuses deletion from any source
 | File | Trigger | Does |
 |---|---|---|
 | `terraform-plan.yml` | PR touching `infrastructure/terraform/**` | plan, posted as a PR comment, updated in place on each push |
-| `terraform-apply.yml` | push to `dev`/`staging`/`main` | plan then apply, behind the reviewer gate |
+| `terraform-apply.yml` | push to **`main` only** | ungated plan job, then a gated apply job |
 
 The plan comment flags destroys explicitly, because that is the line a reviewer
 must not skim.
 
-`terraform-apply.yml` applies a **saved plan file** rather than re-planning. The
-world can move between the two, and applying a file guarantees that what ran is
-what the reviewer approved.
+**`main` only, deliberately.** `dev`, `staging` and `main` are *application*
+environments served by one set of machines. There is a single cluster and a
+single state file, so applying from three branches means three branches racing
+to define one reality: merge a change to `dev`, then promote an older `staging`,
+and Terraform treats the older branch as desired state and rolls the newer
+change back. Infrastructure changes still travel `feature → dev → staging →
+main` for review; they just take effect once.
+
+**Two jobs, and the split is the point.** A job-level `environment:` gate is
+evaluated *before any step in that job runs*. A single gated job therefore asks
+the reviewer to approve before the plan exists — they approve a description, not
+a diff. The ungated `plan` job renders the plan into its job summary; the gated
+`apply` job runs only after a human has read it.
+
+The apply job re-plans rather than applying a file handed over from the plan job.
+A saved plan would guarantee that what runs is exactly what was reviewed, which
+is the better property — but a `tfplan` file embeds every variable value it was
+planned with, the API token included, and an artifact is readable by anyone with
+repo access while a secret is not. The state lock and the `tf-apply` concurrency
+group mean the only thing that can move state in between is a human running
+apply by hand at that moment.
 
 Neither workflow touches `k8s/` yet. That stack needs a kubeconfig, which means
 another secret holding cluster-admin credentials — worth doing deliberately, once
 the hetzner stack has run through CI a few times.
+
+---
+
+## Kafka reachability from outside the cluster
+
+**Open a port per broker, not just the bootstrap port.** A client bootstraps
+against `external_node_port`, and Kafka answers with metadata naming the address
+of every broker holding a partition. A Strimzi NodePort listener gives each
+broker its *own* NodePort, so a client that bootstraps fine then fails
+connecting to a port nobody opened — and it reads as a dead broker rather than a
+firewall rule.
+
+The k8s stack assigns them explicitly at `external_node_port + 1 + index`, so the
+numbers are knowable at plan time and stack 1 can name them:
+
+```hcl
+# hetzner/terraform.tfvars — bootstrap 30092, one broker on 30093
+public_tcp_ports = ["30092", "30093"]
+```
+
+Raising `broker_count` means adding a port here for each new broker.
 
 ---
 

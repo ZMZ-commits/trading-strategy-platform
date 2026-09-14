@@ -98,14 +98,37 @@ resource "kubectl_manifest" "kafka" {
             type = "nodeport"
             tls  = false
             configuration = {
+              # Both halves are needed, and only setting the first is a trap.
+              #
+              # A client bootstraps against the bootstrap port, and Kafka
+              # answers with metadata naming the address of every broker that
+              # owns a partition. For a NodePort listener Strimzi allocates a
+              # SEPARATE NodePort per broker, so a client that bootstraps
+              # successfully then tries to connect to a port nobody opened, and
+              # the failure looks like the broker is down rather than firewalled.
+              #
+              # Assigned explicitly rather than left to Strimzi so the numbers
+              # are knowable at plan time -- var.public_tcp_ports in stack 1 has
+              # to name them, and it cannot name a port chosen at random later.
               bootstrap = { nodePort = var.external_node_port }
+              brokers = [
+                for i in range(var.broker_count) : {
+                  broker   = i
+                  nodePort = var.external_node_port + 1 + i
+                }
+              ]
             }
           },
         ]
         config = {
-          # Every partition on all three brokers, and a write is only
+          # Derived from broker_count, which defaults to 1 on this cluster --
+          # see the variable for why. At 1 these all collapse to 1, and a node
+          # loss stops ingestion; there is no arrangement of one broker that
+          # survives losing the machine it is on.
+          #
+          # At 3: every partition on all three brokers, and a write is only
           # acknowledged once two of them hold it. That is what survives losing
-          # a node: the third broker is missing, two still have the data, and
+          # a node -- the third broker is missing, two still have the data, and
           # producers carry on.
           #
           # min.insync.replicas of 2 rather than 3 is the whole point. At 3 a
@@ -140,12 +163,36 @@ resource "kubectl_manifest" "node_pool" {
       replicas = var.broker_count
       roles    = ["controller", "broker"]
 
-      # One broker per node. Three brokers sharing a machine is three brokers
-      # lost at once, which is the failure this whole arrangement exists to
-      # survive -- and Strimzi will happily stack them without being told not to.
+      # Two placement rules, doing different jobs.
+      #
+      # nodeAffinity puts Kafka on the node this cluster set aside for it. The
+      # tsp.role labels exist for exactly this -- without it the scheduler picks
+      # by free memory, and Kafka lands on the database node the first time
+      # TimescaleDB is idle.
+      #
+      # podAntiAffinity keeps brokers off each other. Three brokers sharing a
+      # machine is three brokers lost at once, which is the failure the whole
+      # arrangement exists to survive, and Strimzi stacks them happily unless
+      # told not to.
+      #
+      # They constrain each other: broker_count must not exceed the number of
+      # nodes carrying var.node_role, or the extras stay Pending forever with
+      # "didn't match pod anti-affinity rules". That is the correct failure --
+      # loud, and not a silently unsafe placement.
       template = {
         pod = {
           affinity = {
+            nodeAffinity = {
+              requiredDuringSchedulingIgnoredDuringExecution = {
+                nodeSelectorTerms = [{
+                  matchExpressions = [{
+                    key      = "tsp.role"
+                    operator = "In"
+                    values   = [var.node_role]
+                  }]
+                }]
+              }
+            }
             podAntiAffinity = {
               requiredDuringSchedulingIgnoredDuringExecution = [{
                 labelSelector = {

@@ -26,9 +26,31 @@ variable "kafka_name" {
 }
 
 variable "external_node_port" {
-  description = "NodePort for producers outside the cluster. Must be in 30000-32767 and open in the stack-1 firewall."
+  description = <<-EOT
+    Base NodePort for producers outside the cluster.
+
+    This is the BOOTSTRAP port. Each broker also gets one, at
+    external_node_port + 1 + broker_index, because a NodePort listener answers a
+    bootstrap request with metadata naming a separate port per broker. So the
+    default reserves 30092 for bootstrap and 30093 upward for brokers.
+
+    Every one of them must be open in stack 1's `public_tcp_ports`, or a client
+    connects, receives metadata, and then fails against a port nobody opened --
+    which reads as a dead broker rather than a firewall rule.
+
+    With the defaults (bootstrap 30092, one broker):
+
+      public_tcp_ports = ["30092", "30093"]
+
+    Must leave room below 32767 for broker_count ports.
+  EOT
   type        = number
   default     = 30092
+
+  validation {
+    condition     = var.external_node_port >= 30000 && var.external_node_port <= 32700
+    error_message = "external_node_port must be in the NodePort range 30000-32700, leaving headroom above it for per-broker ports."
+  }
 }
 
 variable "broker_storage" {
@@ -55,21 +77,44 @@ variable "retention_days" {
 
 variable "broker_count" {
   description = <<-EOT
-    One broker per node, up to three.
+    Brokers, one per node carrying var.node_role.
 
-    Not a throughput setting -- a single broker handles well over 100,000
-    messages a second and this feed peaks in the hundreds. It is about not
-    putting a single point of failure inside a cluster bought for redundancy:
-    three nodes and one broker means a node loss stops ingestion anyway.
+    Defaults to 1 on this cluster, and that is a memory decision rather than a
+    throughput one. A Strimzi broker wants ~1.5 GB; the agents here have 2.4 GB
+    allocatable each and the cluster has ~9.1 GB in total, most of which is spoken
+    for by TimescaleDB and the observability stack. Three brokers would take a
+    third of everything to protect a feed that peaks in the hundreds of messages
+    a second -- a single broker handles well over 100,000.
 
-    Three is the ceiling worth paying for. More brokers than nodes just stacks
-    two on one machine, which is two lost together.
+    What 1 costs: a node loss stops ingestion, and replication factor 1 means
+    the partitions on that machine are gone until it returns. That is the honest
+    trade for 4 GB nodes, not something to paper over with a comment.
+
+    Raise it to 3 when there are three nodes with room. Nothing else needs to
+    change: replication factor, min.insync.replicas and the per-broker NodePorts
+    are all derived from this.
+
+    It must not exceed the number of nodes labelled var.node_role. Set it higher
+    and the extra brokers stay Pending -- podAntiAffinity refuses to stack them,
+    which is the correct failure.
   EOT
   type        = number
-  default     = 3
+  default     = 1
 
   validation {
     condition     = var.broker_count >= 1 && var.broker_count <= 5
-    error_message = "broker_count must be between 1 and 5, and should not exceed the node count."
+    error_message = "broker_count must be between 1 and 5, and must not exceed the number of nodes labelled tsp.role=<node_role>."
   }
+}
+
+variable "node_role" {
+  description = <<-EOT
+    The `tsp.role` node label Kafka is pinned to, via nodeAffinity.
+
+    Stack 1 labels every node with its role, and this is what makes the plan in
+    the docs real: without it the scheduler picks by free memory and Kafka lands
+    on the database node the first time TimescaleDB happens to be idle.
+  EOT
+  type        = string
+  default     = "stream"
 }
