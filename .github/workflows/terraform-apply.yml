@@ -57,9 +57,66 @@ env:
   TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
 
 jobs:
+  # ---------------------------------------------------------------- preflight
+  #
+  # Terraform CI needs credentials that live only in repository secrets. Until
+  # they are set, `terraform init` fails against the R2 backend with an error
+  # naming an AWS service this project does not use, on a workflow that is
+  # simply not set up yet.
+  #
+  # A red check means "your change broke something". An unconfigured workflow is
+  # a different statement and deserves a different signal, or the first real
+  # failure arrives looking exactly like the noise you have learned to ignore.
+  #
+  # The `secrets` context is not available in a job-level `if:`, which is why
+  # this is a job that reports rather than a condition.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          R2_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          R2_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          HCLOUD: ${{ secrets.HCLOUD_TOKEN }}
+          CIDRS: ${{ secrets.ADMIN_CIDRS }}
+          SSH_KEY: ${{ secrets.CLUSTER_SSH_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
+          [ -n "$R2_SECRET" ] || missing="$missing AWS_SECRET_ACCESS_KEY"
+          [ -n "$HCLOUD" ]    || missing="$missing HCLOUD_TOKEN"
+          [ -n "$CIDRS" ]     || missing="$missing ADMIN_CIDRS"
+          [ -n "$SSH_KEY" ]   || missing="$missing CLUSTER_SSH_PRIVATE_KEY"
+
+          if [ -z "$missing" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Terraform CI is not configured yet"
+              echo
+              echo "Skipping the apply. Missing repository secrets:"
+              echo
+              for s in $missing; do echo "- \`$s\`"; done
+              echo
+              echo "Setup: [\`infrastructure/terraform/README.md\`](infrastructure/terraform/README.md)."
+              echo
+              echo "Nothing was applied. Run it locally instead:"
+              echo '```'
+              echo "cd infrastructure/terraform/hetzner"
+              echo "terraform plan -out=tfplan && terraform apply tfplan"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Terraform CI not configured; skipping apply. Missing:$missing"
+          fi
+
   # ------------------------------------------------------------------- plan
   # Ungated on purpose: this is what the reviewer reads before approving.
   plan:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -134,7 +191,8 @@ jobs:
   # ------------------------------------------------------------------ apply
   # Gated. Runs only after a human has read the plan job's summary.
   apply:
-    needs: plan
+    needs: [preflight, plan]
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     environment: terraform-apply
     defaults:
