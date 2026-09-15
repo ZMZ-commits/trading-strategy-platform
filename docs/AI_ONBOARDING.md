@@ -123,4 +123,4 @@ the platform repo owns `docs/`.
 | What a specific repo's code does | that repo's `AI_CONTEXT.md` |
 | Recent changes in a repo | that repo's `AI_CONTEXT.md` → "Latest Changes (Living)" |
 | Branching/PR rules | `CLAUDE.md` |
-| How to deploy | `DEPLOY.md`, `DEPLOY_AWS.md`, `deploy/README.md` |
+| How to deploy | `DEPLOY.md`, `deploy/README.md`, `infrastructure/terraform/` |

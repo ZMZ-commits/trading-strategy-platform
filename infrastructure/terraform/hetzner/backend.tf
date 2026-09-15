@@ -1,0 +1,78 @@
+/**
+ * Remote state on Cloudflare R2.
+ *
+ * Rename this to backend.tf and fill in the account id to activate it. It is
+ * kept as .example so that `terraform init` keeps working locally until you are
+ * ready -- a backend block with a placeholder endpoint fails immediately.
+ *
+ * Why remote state at all: a GitHub runner is destroyed after every job, so
+ * state on its disk is state that does not exist. Terraform would start each
+ * run seeing none of your infrastructure and offer to build a second copy of
+ * all of it.
+ *
+ * Why R2: the free tier is 10 GB and this file is ~50 KB. You already have a
+ * Cloudflare account for Pages and DNS.
+ *
+ * Why not MinIO, which is also S3-compatible and also yours: it runs inside the
+ * cluster this stack builds. Terraform would need the cluster to exist in order
+ * to find out whether the cluster exists.
+ */
+
+terraform {
+  backend "s3" {
+    bucket = "tsp-tfstate"
+    key    = "hetzner/terraform.tfstate"
+
+    # R2 is one global namespace, but the AWS SDK insists on a region.
+    region = "auto"
+
+    endpoints = {
+      # Cloudflare dashboard -> R2 -> the account id is in the right sidebar,
+      # and in the S3 API endpoint it shows you. Not a credential -- it is an
+      # identifier, and it appears in every request URL.
+      s3 = "https://6ca4b7fdec05454e6f55567122735dca.r2.cloudflarestorage.com"
+    }
+
+    # Locking. Terraform writes <key>.tflock with an If-None-Match conditional
+    # PUT, so a second apply fails to create it and knows the state is held.
+    #
+    # This replaces the DynamoDB table the S3 backend used to need, which is
+    # what makes a non-AWS S3 service usable as a backend at all.
+    #
+    # It depends on R2 honouring conditional writes. Verify it rather than
+    # assuming: run two plans at once and confirm the second one waits. Without
+    # locking, two simultaneous applies can interleave writes and leave state
+    # describing infrastructure that never existed.
+    use_lockfile = true
+
+    # Everything below is "you are not talking to AWS". Each of these is a call
+    # the SDK would otherwise make to an AWS service that is not there:
+    #   credentials_validation -> STS
+    #   region_validation      -> the AWS region list, which has no "auto"
+    #   requesting_account_id  -> IAM
+    #   metadata_api_check     -> EC2 instance metadata, 169.254.169.254
+    # Left on, they do not fail fast -- they hang until a timeout, and the error
+    # names a service you are not using.
+    skip_credentials_validation = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+
+    # R2 rejects the newer checksum headers the AWS SDK adds by default, with an
+    # error that reads like a permissions problem rather than a compatibility
+    # one.
+    skip_s3_checksum = true
+  }
+}
+
+# Credentials are NOT here. The S3 backend reads them from the environment:
+#
+#   AWS_ACCESS_KEY_ID       R2 access key id
+#   AWS_SECRET_ACCESS_KEY   R2 secret access key
+#
+# Create them at: Cloudflare dashboard -> R2 -> API -> Manage API Tokens
+# -> Create Account API token, with Object Read & Write scoped to this bucket.
+#
+# The secret is shown once. In CI they come from repository secrets; locally,
+# put them in your shell profile rather than typing them into a command line --
+# shell history is a file too.

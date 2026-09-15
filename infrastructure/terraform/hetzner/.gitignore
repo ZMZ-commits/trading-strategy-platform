@@ -1,0 +1,8 @@
+# real credentials and state. never commit.
+terraform.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+# .terraform.lock.hcl is deliberately tracked: it pins provider versions and
+# checksums, so CI resolves the same ones this stack was tested against.
+kubeconfig.yaml

@@ -1,0 +1,195 @@
+# Plan on every PR that touches infrastructure, and post the diff as a comment.
+#
+# Safe by construction: `plan` never writes. It authenticates, reads what exists,
+# and prints what it would change. The point is that the diff is reviewed on the
+# PR by a person, before the merge that applies it.
+#
+# Deliberately no apply here. Plan and apply carry opposite risk and belong in
+# separate files with separate permissions -- this job can comment on a PR and
+# nothing else.
+
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - "infrastructure/terraform/**"
+      - ".github/workflows/terraform-*.yml"
+
+permissions:
+  contents: read
+  pull-requests: write # to post the plan as a comment
+
+concurrency:
+  # Per-PR, and cancellable: a superseded plan is just noise.
+  group: tf-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- preflight
+  #
+  # Terraform CI needs credentials that live only in repository secrets. Until
+  # they are set, `terraform init` fails against the R2 backend with "failed to
+  # refresh cached credentials, no EC2 IMDS role found" -- an error naming an AWS
+  # service this project does not use, on a workflow that is simply not set up
+  # yet.
+  #
+  # A red check means "your change broke something". An unconfigured workflow is
+  # a different statement and deserves a different signal, or the first real
+  # failure arrives looking exactly like the noise you have learned to ignore.
+  #
+  # The `secrets` context is not available in a job-level `if:`, which is why
+  # this is a job that reports rather than a condition.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          R2_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          R2_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          HCLOUD: ${{ secrets.HCLOUD_TOKEN }}
+          CIDRS: ${{ secrets.ADMIN_CIDRS }}
+          TS_ROUTER: ${{ secrets.TS_ROUTER_AUTHKEY }}
+        run: |
+          missing=""
+          [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
+          [ -n "$R2_SECRET" ] || missing="$missing AWS_SECRET_ACCESS_KEY"
+          [ -n "$HCLOUD" ]    || missing="$missing HCLOUD_TOKEN"
+          [ -n "$CIDRS" ]     || missing="$missing ADMIN_CIDRS"
+          [ -n "$TS_ROUTER" ] || missing="$missing TS_ROUTER_AUTHKEY"
+
+          if [ -z "$missing" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "All required secrets present." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Terraform CI is not configured yet"
+              echo
+              echo "Skipping the plan. Missing repository secrets:"
+              echo
+              for s in $missing; do echo "- \`$s\`"; done
+              echo
+              echo "Setup: [\`infrastructure/terraform/README.md\`](infrastructure/terraform/README.md)."
+              echo
+              echo "Until these exist, run Terraform locally:"
+              echo '```'
+              echo "cd infrastructure/terraform/hetzner"
+              echo "terraform plan -out=tfplan && terraform apply tfplan"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Terraform CI not configured; skipping plan. Missing:$missing"
+          fi
+
+  # --------------------------------------------------------------------- plan
+  plan:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/hetzner
+
+    # The S3 backend reads R2 credentials from the environment, and every step
+    # that touches state needs them. Named for the S3 protocol, not for AWS;
+    # nothing here talks to Amazon.
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Format check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Validate
+        run: terraform validate -no-color
+
+      - name: Plan
+        id: plan
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          # The same value the apply will use. A plan run with a different
+          # admin_cidrs shows a firewall diff that will not happen, which is
+          # worse than no plan at all -- a reviewer approves a change they did
+          # not actually see.
+          TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
+          # Without this the plan shows the subnet router being destroyed --
+          # a diff that would not happen on apply, so the reviewer approves a
+          # change they did not actually make.
+          TF_VAR_tailscale_auth_key: ${{ secrets.TS_ROUTER_AUTHKEY }}
+          # Matches apply. `plan` never opens an SSH connection, so this job
+          # need not be on the tailnet -- it only has to agree with apply.
+          TF_VAR_connect_via: tailnet
+        run: |
+          terraform plan -no-color -input=false -lock-timeout=5m > plan.txt 2>&1 || echo "PLAN_FAILED=1" >> "$GITHUB_ENV"
+          # Trim to the last 60k so a large plan still fits in a comment.
+          tail -c 60000 plan.txt > plan.trimmed
+        continue-on-error: true
+
+      - name: Comment the plan on the PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync(
+              'infrastructure/terraform/hetzner/plan.trimmed', 'utf8');
+
+            const fmtOk = '${{ steps.fmt.outcome }}' === 'success';
+            const failed = process.env.PLAN_FAILED === '1';
+
+            // Destroys are the thing a reviewer must not skim past.
+            const destroys = (plan.match(/^Plan: .* (\d+) to destroy/m) || [])[1];
+            const warn = destroys && destroys !== '0'
+              ? `\n> [!WARNING]\n> This plan **destroys ${destroys} resource(s)**. Read it line by line.\n`
+              : '';
+
+            const body = [
+              `### Terraform plan — \`infrastructure/terraform/hetzner\``,
+              ``,
+              `Format: ${fmtOk ? '✅' : '⚠️ run `terraform fmt -recursive`'} · Plan: ${failed ? '❌ failed' : '✅'}`,
+              warn,
+              `<details><summary>Show plan</summary>`,
+              ``,
+              '```terraform',
+              plan,
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const mine = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('### Terraform plan —'));
+
+            // Update in place rather than appending, so a PR with six pushes has
+            // one current plan instead of six stale ones.
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body });
+            }
+
+      - name: Fail the check if the plan failed
+        if: env.PLAN_FAILED == '1'
+        run: |
+          echo "::error::terraform plan failed - see the PR comment"
+          exit 1
