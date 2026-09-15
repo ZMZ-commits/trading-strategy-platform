@@ -122,14 +122,21 @@ systemctl status cloudflared --no-pager
 You want `active (running)`. Back in the dashboard the tunnel should flip to
 **HEALTHY** within about thirty seconds.
 
-**Memory check** — these are 2.4 GB nodes and `cloudflared` is not free:
+**Memory check:**
 
 ```bash
 systemctl show cloudflared -p MemoryCurrent
 ```
 
-Expect roughly 30–60 MB. If it is far more, that is worth understanding before
-you install it on the other three.
+Expect roughly 30-60 MB. If it is far more, understand why before installing it
+on the other three.
+
+**This does not reduce pod capacity.** `cloudflared` is a systemd service outside
+Kubernetes, and `allocatable` is arithmetic rather than measurement -- capacity
+minus the reservation flags, fixed regardless of what else runs. The node
+currently uses ~600 MB of the 1324 MB reserved for the kubelet and the OS, so
+cloudflared takes 50 MB of roughly 700 MB of existing slack. Allocatable stays at
+2490 MB either way.
 
 Repeat for all four nodes, each with its own tunnel token.
 
@@ -370,7 +377,9 @@ time rather than discovering both broke together.
 ## What it costs
 
 **`cloudflared` runs on every node.** Another process to keep updated and debug
-when it misbehaves — and on 2.4 GB agents, 30–60 MB each is real.
+when it misbehaves. The resource cost is close to nothing — ~70 MB of disk
+against 34 GB free, and RAM that comes out of already-reserved slack rather than
+out of pod capacity — so the real cost is operational, not capacity.
 
 **Cloudflare becomes load-bearing.** If Zero Trust has an outage and port 22 is
 closed, your way in is the Hetzner web console. That is a genuine dependency, not
