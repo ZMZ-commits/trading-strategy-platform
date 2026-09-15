@@ -55,14 +55,17 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
   TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
-  # Terraform needs these, not just the tailscale action below.
+  # Terraform needs this, not just the tailscale action below.
   #
-  # The subnet router is gated on `count = var.tailscale_oauth_client_id != ""`.
-  # Leave these unset in CI and count flips to 0, so the plan DESTROYS the
-  # router -- silently taking away the access the same workflow depends on.
-  # Same two secrets serve both purposes.
-  TF_VAR_tailscale_oauth_client_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-  TF_VAR_tailscale_oauth_secret: ${{ secrets.TS_OAUTH_SECRET }}
+  # The subnet router is gated on `count = var.tailscale_auth_key != ""`.
+  # Leave it unset in CI and count flips to 0, so the plan DESTROYS the router
+  # -- silently taking away the access this same workflow depends on.
+  TF_VAR_tailscale_auth_key: ${{ secrets.TS_ROUTER_AUTHKEY }}
+
+  # Reach the nodes over the tailnet rather than their public addresses. A
+  # runner's Azure address is not in admin_cidrs and never will be; the private
+  # interface needs no firewall rule at all.
+  TF_VAR_connect_via: tailnet
 
 jobs:
   # ---------------------------------------------------------------- preflight
@@ -90,8 +93,8 @@ jobs:
           HCLOUD: ${{ secrets.HCLOUD_TOKEN }}
           CIDRS: ${{ secrets.ADMIN_CIDRS }}
           SSH_KEY: ${{ secrets.CLUSTER_SSH_PRIVATE_KEY }}
-          TS_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_ROUTER: ${{ secrets.TS_ROUTER_AUTHKEY }}
+          TS_CI: ${{ secrets.TS_CI_AUTHKEY }}
         run: |
           missing=""
           [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
@@ -102,8 +105,8 @@ jobs:
           # Required rather than optional. An empty value does not disable the
           # subnet router -- it plans its destruction, because count is derived
           # from whether the id is set.
-          [ -n "$TS_ID" ]     || missing="$missing TS_OAUTH_CLIENT_ID"
-          [ -n "$TS_SECRET" ] || missing="$missing TS_OAUTH_SECRET"
+          [ -n "$TS_ROUTER" ] || missing="$missing TS_ROUTER_AUTHKEY"
+          [ -n "$TS_CI" ]     || missing="$missing TS_CI_AUTHKEY"
 
           if [ -z "$missing" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
@@ -225,6 +228,45 @@ jobs:
       # time. The plan job has already refused anything that would actually
       # connect, so this is never used to reach a node from CI -- but Terraform
       # evaluates the whole config regardless of what is changing.
+      # Joins as an EPHEMERAL node, removed when the job ends. A non-ephemeral
+      # key would leave one dead-but-still-authorized peer per workflow run.
+      #
+      # --accept-routes is not optional. Without it the runner joins the tailnet
+      # and ignores the advertised 10.0.1.0/24, so every node address times out
+      # -- the same symptom as an unapproved route, from a third cause.
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          args: --accept-routes
+
+      # Fail here, in three seconds, with a message naming the likely cause --
+      # rather than in the provisioner, after a three-minute SSH timeout, with
+      # a connection error that says nothing.
+      - name: Confirm the cluster subnet is reachable
+        run: |
+          for ip in 10.0.1.10 10.0.1.11 10.0.1.12 10.0.1.13; do
+            ok=0
+            for i in $(seq 20); do
+              if timeout 2 bash -c "cat < /dev/null > /dev/tcp/$ip/22" 2>/dev/null; then
+                echo "  $ip reachable"; ok=1; break
+              fi
+              sleep 1
+            done
+            if [ "$ok" = 0 ]; then
+              {
+                echo "### Cannot reach $ip over the tailnet"
+                echo
+                echo "Check, in order:"
+                echo "- the subnet route is approved (Tailscale console -> Machines -> router -> route settings)"
+                echo "- the ACL lets \`tag:ci\` reach \`10.0.1.0/24:22,6443\`"
+                echo "- the router node is online"
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::$ip unreachable over the tailnet"
+              exit 1
+            fi
+          done
+
       - name: Load the cluster SSH key
         run: |
           mkdir -p ~/.ssh

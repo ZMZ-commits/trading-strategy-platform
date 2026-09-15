@@ -8,6 +8,14 @@ deploy/.env
 # committed. The .example file is the thing that gets shared.
 *.tfvars
 !*.tfvars.example
+# Anything DERIVED from a tfvars file holds the same secrets. `*.tfvars` does
+# not match `terraform.tfvars.bak`, and a backup made during an edit was
+# committed because of exactly that gap.
+*.tfvars.*
+!*.tfvars.example
+*.bak
+*.orig
+*.save
 *.tfstate
 *.tfstate.*
 # A saved plan embeds every variable value it was planned with -- the Hetzner

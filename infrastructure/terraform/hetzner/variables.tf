@@ -139,6 +139,36 @@ variable "data_volume_gb" {
   default     = 0
 }
 
+variable "connect_via" {
+  description = <<-EOT
+    How Terraform reaches a node over SSH to install k3s.
+
+      public   the node's public IPv4. Requires the caller's address to be in
+               admin_cidrs -- true for your laptop, false for a GitHub runner,
+               which is a throwaway VM on a random Azure address.
+
+      tailnet  the node's private address, routed by the subnet router. Works
+               from anywhere on the tailnet and needs no firewall rule at all,
+               because traffic arrives on the private interface and Hetzner
+               cloud firewalls only filter the public one.
+
+    CI sets `tailnet`. Locally, `public` keeps working whether or not Tailscale
+    is running -- which matters, because the router is the thing that provides
+    the tailnet and cannot be repaired through it.
+
+    Note this does NOT appear in any triggers_replace. Switching it changes how
+    Terraform connects, not what it installs, so it is not a reason to reinstall
+    k3s on a running node.
+  EOT
+  type        = string
+  default     = "public"
+
+  validation {
+    condition     = contains(["public", "tailnet"], var.connect_via)
+    error_message = "connect_via must be \"public\" or \"tailnet\"."
+  }
+}
+
 # ----------------------------------------------------------------- tailscale
 
 variable "tailscale_auth_key" {

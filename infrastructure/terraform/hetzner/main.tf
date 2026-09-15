@@ -75,6 +75,14 @@ locals {
     for name, a in var.agent_roles : name => "10.0.1.${a.host}"
   }
 
+  # Where Terraform SSHes to reach each node. See var.connect_via.
+  server_ssh_host = var.connect_via == "tailnet" ? local.server_private_ip : data.hcloud_server.server.ipv4_address
+  agent_ssh_host = {
+    for name, a in var.agent_roles : name => (
+      var.connect_via == "tailnet" ? local.agent_private_ips[name] : data.hcloud_server.agent[name].ipv4_address
+    )
+  }
+
   tailscale_subnet = "10.0.1.0/24"
 
   # The router exists only when a key is supplied, so this stack still applies
@@ -263,7 +271,7 @@ resource "terraform_data" "k3s_server" {
 
   connection {
     type        = "ssh"
-    host        = data.hcloud_server.server.ipv4_address
+    host        = local.server_ssh_host
     user        = "root"
     private_key = file(pathexpand(var.ssh_private_key_path))
     timeout     = "3m"
@@ -301,7 +309,7 @@ resource "terraform_data" "k3s_agent" {
 
   connection {
     type        = "ssh"
-    host        = data.hcloud_server.agent[each.key].ipv4_address
+    host        = local.agent_ssh_host[each.key]
     user        = "root"
     private_key = file(pathexpand(var.ssh_private_key_path))
     timeout     = "3m"
@@ -348,6 +356,13 @@ resource "terraform_data" "tailscale_router" {
     routes = local.tailscale_subnet
   }
 
+  # Public, always -- never local.connect_via.
+  #
+  # This node is what provides the tailnet. Reaching it over the tailnet to
+  # install or repair the thing that creates the tailnet is circular, and the
+  # failure mode is the worst one: the router is broken, so you cannot connect,
+  # so you cannot fix the router. It stays on the public path, which means
+  # repairing it always requires being inside admin_cidrs.
   connection {
     type        = "ssh"
     host        = local.tailscale_router_public_ip
