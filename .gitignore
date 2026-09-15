@@ -32,3 +32,6 @@ crash.log
 
 # Cluster credentials fetched from the k3s node.
 kubeconfig.yaml
+
+# Local Claude Code launch config -- machine-specific, deliberately untracked.
+.claude/launch.json
