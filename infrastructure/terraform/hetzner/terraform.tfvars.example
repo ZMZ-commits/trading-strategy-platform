@@ -1,0 +1,47 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Never paste the token into a chat window, a commit, or a command line -- shell
+# history is a file too. It belongs in terraform.tfvars and nowhere else.
+
+hcloud_token = "your-hetzner-read-write-token"
+
+# Your public IP as a /32. Find it with: curl ifconfig.me
+#
+# Do NOT use 0.0.0.0/0 -- that exposes the Kubernetes API to the internet.
+# And get it right first time: this firewall attaches to machines you may
+# already be sshed into, so a wrong value locks you out of all of them at once.
+# The recovery is the console web terminal.
+admin_cidrs = ["203.0.113.4/32"]
+
+# ---------------------------------------------------------------- the nodes
+#
+# These name servers that ALREADY EXIST. Terraform reads them and never creates
+# or destroys them -- see the note at the top of main.tf. Editing a name points
+# the lookup somewhere else; it does not rename a machine.
+#
+#   trading-platform-2   intake          control plane, ingress, Redis, pipeline
+#   trading-platform-3   data            TimescaleDB          + the volume
+#   trading-platform-4   stream          Kafka, Strimzi, MinIO
+#   trading-platform-5   observability   Prometheus, Loki, Tempo, Alertmanager
+#
+# trading-platform is deliberately absent. It still serves production under
+# Docker Compose and joins as the "apps" node later, at cutover.
+
+# server_name = "trading-platform-2"
+#
+# `host` is the last octet on 10.0.1.0/24, stated rather than derived. Adding a
+# node picks the next free number and touches nothing that already exists.
+#
+# agent_roles = {
+#   "trading-platform-3" = { role = "data",          host = 11 }
+#   "trading-platform-4" = { role = "stream",        host = 12 }
+#   "trading-platform-5" = { role = "observability", host = 13 }
+# }
+
+# Nothing is served publicly until ingress exists. Add ["80", "443"] then.
+# public_tcp_ports = []
+
+# Persistent volume on the data node, for TimescaleDB. Survives the machine.
+# data_volume_gb = 20
