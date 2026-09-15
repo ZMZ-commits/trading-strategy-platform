@@ -111,6 +111,19 @@ Settings → Secrets and variables → Actions.
 | `CLUSTER_SSH_PRIVATE_KEY` | private half of `~/.ssh/hetzner` | Whole file, including the BEGIN/END lines |
 | `AWS_ACCESS_KEY_ID` | R2 access key id | Named for the S3 protocol, not for AWS |
 | `AWS_SECRET_ACCESS_KEY` | R2 secret access key | Shown once when the token is created |
+| `TS_OAUTH_CLIENT_ID` | Tailscale OAuth client id | Also used by Terraform, not just the tailscale action |
+| `TS_OAUTH_SECRET` | Tailscale OAuth client secret | Does not expire, unlike an auth key |
+
+### Why the Tailscale pair is required, not optional
+
+The subnet router is gated on `count = var.tailscale_oauth_client_id != ""`.
+Leave those two unset in CI and `count` flips to `0`, so the plan **destroys the
+router** — silently removing the network access the same workflow depends on to
+reach the nodes.
+
+They are the same two values that live in `terraform.tfvars` locally. Two places
+for one credential is normal: your laptop reads a gitignored file, CI reads a
+secret.
 
 `ADMIN_CIDRS` is the one that will catch you out. Terraform reads `TF_VAR_*` for
 a `list(string)` as HCL, so `203.0.113.4/32` fails and `["203.0.113.4/32"]`

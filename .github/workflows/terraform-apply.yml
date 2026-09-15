@@ -55,6 +55,14 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
   TF_VAR_admin_cidrs: ${{ secrets.ADMIN_CIDRS }}
+  # Terraform needs these, not just the tailscale action below.
+  #
+  # The subnet router is gated on `count = var.tailscale_oauth_client_id != ""`.
+  # Leave these unset in CI and count flips to 0, so the plan DESTROYS the
+  # router -- silently taking away the access the same workflow depends on.
+  # Same two secrets serve both purposes.
+  TF_VAR_tailscale_oauth_client_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+  TF_VAR_tailscale_oauth_secret: ${{ secrets.TS_OAUTH_SECRET }}
 
 jobs:
   # ---------------------------------------------------------------- preflight
@@ -82,6 +90,8 @@ jobs:
           HCLOUD: ${{ secrets.HCLOUD_TOKEN }}
           CIDRS: ${{ secrets.ADMIN_CIDRS }}
           SSH_KEY: ${{ secrets.CLUSTER_SSH_PRIVATE_KEY }}
+          TS_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
         run: |
           missing=""
           [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
@@ -89,6 +99,11 @@ jobs:
           [ -n "$HCLOUD" ]    || missing="$missing HCLOUD_TOKEN"
           [ -n "$CIDRS" ]     || missing="$missing ADMIN_CIDRS"
           [ -n "$SSH_KEY" ]   || missing="$missing CLUSTER_SSH_PRIVATE_KEY"
+          # Required rather than optional. An empty value does not disable the
+          # subnet router -- it plans its destruction, because count is derived
+          # from whether the id is set.
+          [ -n "$TS_ID" ]     || missing="$missing TS_OAUTH_CLIENT_ID"
+          [ -n "$TS_SECRET" ] || missing="$missing TS_OAUTH_SECRET"
 
           if [ -z "$missing" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
