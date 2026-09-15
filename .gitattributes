@@ -1,0 +1,46 @@
+# Line endings.
+#
+# core.autocrlf=true on this machine rewrites checked-out files to CRLF. That is
+# fine for editing and wrong for anything whose *content* is compared as a
+# string across machines.
+#
+# Terraform is the concrete case: a heredoc in an `output` block becomes a value
+# stored in state. Write the file with LF, store LF in state, then check it out
+# as CRLF, and every subsequent plan reports the output as changed -- each line
+# removed and re-added with identical text. Worse, a Linux CI runner checks out
+# LF while a Windows laptop has CRLF, so the two never agree on a plan even
+# though they share the same state.
+#
+# Forcing LF makes the bytes identical everywhere.
+
+* text=auto eol=lf
+
+*.tf     text eol=lf
+*.tfvars text eol=lf
+*.hcl    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+*.py     text eol=lf
+*.md     text eol=lf
+*.json   text eol=lf
+
+# Shell scripts that run on a Linux box cannot have CRLF at all -- the shebang
+# becomes "#!/bin/sh\r", and the error is "no such file or directory" naming an
+# interpreter that plainly exists.
+Dockerfile*     text eol=lf
+*.Caddyfile     text eol=lf
+
+# Windows-only, and genuinely wants CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch these.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.woff binary
+*.woff2 binary

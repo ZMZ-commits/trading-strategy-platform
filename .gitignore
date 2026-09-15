@@ -1,3 +1,37 @@
 # Local env files with secrets (Alpaca keys, etc.) — never commit
 deploy/.env
 .env
+
+# --- Terraform ---
+# tfvars holds the Hetzner API token; state holds every secret Terraform has
+# ever seen, in plaintext, including ones marked sensitive. Neither is ever
+# committed. The .example file is the thing that gets shared.
+*.tfvars
+!*.tfvars.example
+# Anything DERIVED from a tfvars file holds the same secrets. `*.tfvars` does
+# not match `terraform.tfvars.bak`, and a backup made during an edit was
+# committed because of exactly that gap.
+*.tfvars.*
+!*.tfvars.example
+*.bak
+*.orig
+*.save
+*.tfstate
+*.tfstate.*
+# A saved plan embeds every variable value it was planned with -- the Hetzner
+# token and the k3s join secret included -- in a file that looks inert.
+tfplan
+*.tfplan
+.terraform/
+crash.log
+
+# .terraform.lock.hcl is deliberately NOT ignored. It pins the exact provider
+# versions and checksums this stack was built and tested against, so a CI runner
+# resolves the same ones rather than whatever is newest that morning.
+
+
+# Cluster credentials fetched from the k3s node.
+kubeconfig.yaml
+
+# Local Claude Code launch config -- machine-specific, deliberately untracked.
+.claude/launch.json

@@ -1,6 +1,9 @@
 # Trading Strategy Platform
 
-Monorepo hub for the trading strategy application. Source code lives in four sub-repos, each wired in as a git submodule under `packages/`.
+Infrastructure and deployment hub for the trading strategy application. The
+four sub-repos are cloned as siblings of this one, not vendored into it --
+`docker-compose.yml` builds from `../trading-strategy-backend` and
+`../trading-strategy-ui`.
 
 ## Live environments
 
@@ -41,28 +44,34 @@ with the UI rather than living somewhere separate.
 
 | Package | Repo | Description |
 |---------|------|-------------|
-| `packages/trading-strategy-ui` | [trading-strategy-ui](https://github.com/zmz-commits/trading-strategy-ui) | React + Vite dashboard |
-| `packages/trading-strategy-backend` | [trading-strategy-backend](https://github.com/zmz-commits/trading-strategy-backend) | FastAPI hub (stocks, strategies, execution) |
-| `packages/trading-strategy-engine` | [trading-strategy-engine](https://github.com/zmz-commits/trading-strategy-engine) | Python strategy runner (imported by backend) |
-| `packages/trading-strategy-data-pipeline` | [trading-strategy-data-pipeline](https://github.com/zmz-commits/trading-strategy-data-pipeline) | Data ingestion pipeline |
+| [trading-strategy-ui](../trading-strategy-ui) | [trading-strategy-ui](https://github.com/zmz-commits/trading-strategy-ui) | React + Vite dashboard |
+| [trading-strategy-backend](../trading-strategy-backend) | [trading-strategy-backend](https://github.com/zmz-commits/trading-strategy-backend) | FastAPI hub (stocks, strategies, execution) |
+| [trading-strategy-engine](../trading-strategy-engine) | [trading-strategy-engine](https://github.com/zmz-commits/trading-strategy-engine) | Python strategy runner (imported by backend) |
+| [trading-strategy-data-pipeline](../trading-strategy-data-pipeline) | [trading-strategy-data-pipeline](https://github.com/zmz-commits/trading-strategy-data-pipeline) | Data ingestion pipeline |
 
 ## First-Time Setup
 
-```bash
-# Clone the platform with all submodules in one shot
-git clone --recurse-submodules -b claude/serene-euler-Gq1ma \
-  https://github.com/zmz-commits/trading-strategy-platform.git
-
-# OR — if you already cloned without --recurse-submodules:
-bash scripts/setup-submodules.sh
-```
-
-## Keeping Submodules Up to Date
+The five repositories are peers, cloned side by side. This one holds the
+infrastructure and the compose files; it does not vendor the others.
 
 ```bash
-# Pull the latest from every sub-repo
-bash scripts/update-submodules.sh
+mkdir Projects && cd Projects
+for r in platform ui backend engine data-pipeline; do
+  git clone https://github.com/zmz-commits/trading-strategy-$r.git 2>/dev/null     || git clone https://github.com/zmz-commits/trading-strategy-platform.git
+done
 ```
+
+`docker-compose.yml` here builds from `../trading-strategy-backend` and
+`../trading-strategy-ui`, so the sibling layout is what makes a local run work:
+
+```bash
+cd trading-strategy-platform
+docker compose up --build     # backend :8000, UI :5173
+```
+
+> Submodules under `packages/` used to mirror the sub-repos. Nothing built from
+> them — the compose file always used the siblings — and their branch pin had
+> gone stale, so they were removed rather than left as a second, wrong copy.
 
 ## Branching Model
 
@@ -72,11 +81,18 @@ All repos follow the same 4-tier model:
 feature/* → deployment → staging → main
 ```
 
-Active development branch: `claude/serene-euler-Gq1ma`
+Active development branch: `dev`
 
 ## Infrastructure
 
-Terraform configs for AWS (EC2 + ECR + S3 + CloudFront) live in `infrastructure/terraform/`. See `DEPLOY_AWS.md` for the full deploy guide.
+Terraform lives in `infrastructure/terraform/`, split into two stacks that are
+applied in order:
+
+- `hetzner/` — provisions the server, network and firewall, and installs k3s
+- `k8s/` — installs Strimzi and Kafka into the cluster the first stack built
+
+They are separate because the Helm provider needs a kubeconfig that does not
+exist until the cluster does. One combined apply fails at plan time.
 
 ## Local Dev (all services)
 
