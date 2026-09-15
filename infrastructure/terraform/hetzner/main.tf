@@ -42,11 +42,24 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    tailscale = {
+      source  = "tailscale/tailscale"
+      version = "~> 0.29"
+    }
   }
 }
 
 provider "hcloud" {
   token = var.hcloud_token
+}
+
+# Authenticates with an OAuth client rather than an API key, because OAuth
+# client secrets do not expire and API keys do. That is the whole reason this
+# provider is here: it removes a recurring chore rather than adding a feature.
+provider "tailscale" {
+  oauth_client_id     = var.tailscale_oauth_client_id
+  oauth_client_secret = var.tailscale_oauth_secret
+  scopes              = ["auth_keys"]
 }
 
 # ------------------------------------------------------------- the machines
@@ -333,8 +346,35 @@ resource "terraform_data" "k3s_agent" {
 #
 # Skipped entirely when tailscale_auth_key is empty, so this stack still applies
 # for anyone who has not set Tailscale up.
+# Minted at apply time rather than pasted in by hand.
+#
+# A Tailscale auth key lives at most 90 days, so a hand-written one is a
+# calendar reminder. An OAuth client secret does not expire and can mint keys on
+# demand, so the rotation disappears instead of being scheduled.
+#
+# Note what an expiring auth key does NOT do: it does not de-authorize a node
+# that already enrolled. That node stays until its own node key expires, which
+# defaults to 180 days -- and for a subnet router you should turn that off
+# entirely in the admin console (Machines -> the node -> Disable key expiry).
+# Tailscale recommends exactly that for trusted servers and subnet routers, and
+# it is the expiry that would actually take the cluster offline one quiet night.
+resource "tailscale_tailnet_key" "router" {
+  count = var.tailscale_oauth_client_id != "" ? 1 : 0
+
+  reusable      = true
+  ephemeral     = false # a subnet router must survive a reboot
+  preauthorized = true
+  expiry        = 7776000 # 90 days, the maximum
+  description   = "terraform: ${var.cluster_name} subnet router"
+  tags          = ["tag:router"]
+
+  # Without this, the key sits in state past its expiry and the next rebuild
+  # fails with an authentication error rather than quietly getting a new key.
+  recreate_if_invalid = "always"
+}
+
 resource "terraform_data" "tailscale_router" {
-  count = var.tailscale_auth_key != "" ? 1 : 0
+  count = var.tailscale_oauth_client_id != "" ? 1 : 0
 
   # Deliberately NOT triggered by the auth key. A pre-auth key is an enrolment
   # credential, not configuration -- rotating it should not re-enrol a router
@@ -369,7 +409,7 @@ resource "terraform_data" "tailscale_router" {
       #   Kubernetes node is a way to have a confusing DNS afternoon.
       # --reset: makes re-running idempotent. Without it, changing the
       #   advertised routes on an already-enrolled node is silently ignored.
-      "tailscale up --authkey='${var.tailscale_auth_key}' --advertise-routes=${local.tailscale_subnet} --accept-dns=false --reset",
+      "tailscale up --authkey='${tailscale_tailnet_key.router[0].key}' --advertise-routes=${local.tailscale_subnet} --accept-dns=false --reset",
 
       "tailscale status",
     ]

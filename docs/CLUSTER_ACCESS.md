@@ -88,24 +88,42 @@ No payment method required.
 
 ---
 
-## 2 — Generate an auth key
+## 2 — OAuth client, not an auth key
 
-`tailscale up` normally prints a URL for a human to click. Terraform installs
-this, and a provisioner has no human — so it needs a pre-authentication key.
+An auth key lives **at most 90 days**, so pasting one in is scheduling a chore.
+An **OAuth client secret does not expire** and can mint keys on demand, so
+Terraform generates a fresh one on every apply and there is nothing to rotate.
 
-Admin console → **Settings → Keys → Generate auth key**
+The same client serves CI in step 6, so this is one credential doing two jobs.
 
-| Field | Value | Why |
-|---|---|---|
-| Reusable | **yes** | rebuilding the node should not need a new key |
-| Ephemeral | **no** | a subnet router must survive a reboot |
-| Tags | `tag:router` | so the ACL in step 5 can name it |
+Admin console -> **Settings -> OAuth clients -> Generate OAuth client**
 
-Put it in `infrastructure/terraform/hetzner/terraform.tfvars` — gitignored:
+| Field | Value |
+|---|---|
+| Description | `terraform` |
+| Scopes | `auth_keys` -- **Write** |
+| Tags | `tag:router`, `tag:ci` |
+
+The secret is shown once. Into `terraform.tfvars`, which is gitignored:
 
 ```hcl
-tailscale_auth_key = "tskey-auth-..."
+tailscale_oauth_client_id = "k123ABC..."
+tailscale_oauth_secret    = "tskey-client-..."
 ```
+
+### The expiry that actually matters
+
+There are two, and the one people worry about is not the dangerous one.
+
+| | Default | What happens |
+|---|---|---|
+| Auth key | 90 days | nothing -- an expired key does **not** de-authorize a node that already enrolled |
+| **Node key** | **180 days** | **the router drops off the tailnet**, and the cluster becomes unreachable |
+
+So after the first apply: admin console -> **Machines** -> the router -> **...** ->
+**Disable key expiry**. Tailscale recommends this for trusted servers and subnet
+routers, and it is the expiry that would take your access away one quiet night
+six months from now.
 
 ---
 

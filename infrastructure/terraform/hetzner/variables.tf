@@ -141,23 +141,29 @@ variable "data_volume_gb" {
 
 # ----------------------------------------------------------------- tailscale
 
-variable "tailscale_auth_key" {
+variable "tailscale_oauth_client_id" {
   description = <<-EOT
-    Pre-authentication key from the Tailscale admin console. Empty disables the
-    subnet router entirely, which is the default so this stack still applies for
-    anyone who has not set Tailscale up.
+    OAuth client id from the Tailscale admin console. Empty disables the subnet
+    router entirely, which is the default so this stack still applies for anyone
+    who has not set Tailscale up.
 
-    A pre-auth key rather than the interactive flow because `tailscale up`
-    normally prints a URL for a human to open, and a provisioner has no human.
+    An OAuth client rather than a pasted auth key, because auth keys expire after
+    at most 90 days and OAuth client secrets do not. Terraform mints a fresh key
+    on each apply, so there is no rotation to remember.
 
-    Generate at Settings -> Keys -> Generate auth key, with:
-      Reusable    yes   -- so rebuilding the node does not need a new key
-      Ephemeral   no    -- a subnet router must persist across reboots
-      Tags        tag:router
+    Generate at Settings -> OAuth clients, with scope `auth_keys` (Write) and
+    tag `tag:router`. The same client can serve CI with `tag:ci`.
+  EOT
+  type        = string
+  default     = ""
+}
 
-    Goes in terraform.tfvars, which is gitignored. It lands in state in
-    plaintext like every other provider secret, which is why state is on R2 and
-    not on disk.
+variable "tailscale_oauth_secret" {
+  description = <<-EOT
+    The OAuth client secret. Goes in terraform.tfvars, which is gitignored.
+
+    Lands in state in plaintext like every other provider secret -- which is why
+    state is on R2 with encryption at rest rather than on a laptop.
   EOT
   type        = string
   sensitive   = true
