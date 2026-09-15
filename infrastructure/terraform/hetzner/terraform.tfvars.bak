@@ -1,0 +1,29 @@
+# Filled in by setup. This file is gitignored -- it never leaves your machine.
+
+# PASTE YOUR TOKEN BETWEEN THE QUOTES, then save.
+# Hetzner console -> your project -> Security -> API tokens -> Generate (Read & Write).
+# Shown exactly once. Do not paste it into a chat window or a command line.
+hcloud_token = "1BX5H2WsjGz2UlneSNxCl3mMwWtQ2BAbzdcAPpbcQFcJ6yO0GsNMDtPR951g00Bd"
+
+# Read off disk, so the key itself is not duplicated into this file.
+ssh_public_key = file("~/.ssh/hetzner.pub")
+
+# Your public IP as a /32 -- looked up at setup time.
+# A home IP changes. When kubectl or ssh starts timing out, check this first.
+admin_cidrs = ["74.68.92.85/32"]
+
+# The four existing machines. Terraform READS these and can never delete them.
+#   ubuntu-4gb-hel1-2   intake          control plane, ingress, Redis, pipeline
+#   ubuntu-4gb-hel1-3   data            TimescaleDB  + the volume
+#   ubuntu-4gb-hel1-4   stream          Kafka, Strimzi, MinIO
+#   ubuntu-4gb-hel1-5   observability   Prometheus, Loki, Tempo, Alertmanager
+# Defaults in variables.tf already match, so nothing to set here.
+
+# Nothing is served publicly until ingress exists. Add ["80","443"] at that phase.
+# public_tcp_ports = []
+
+# Persistent volume on the data node. Survives the machine; a boot disk does not.
+# data_volume_gb = 20
+
+tailscale_oauth_client_id = "k8Y4N4k3Mi11CNTRL"
+tailscale_oauth_secret    = "tskey-auth-k8Y4N4k3Mi11CNTRL-aDaHepksYq4ieNJ2dhy2q4WJunLK9bP8K"

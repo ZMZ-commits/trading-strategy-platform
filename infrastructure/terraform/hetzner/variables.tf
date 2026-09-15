@@ -141,29 +141,21 @@ variable "data_volume_gb" {
 
 # ----------------------------------------------------------------- tailscale
 
-variable "tailscale_oauth_client_id" {
+variable "tailscale_auth_key" {
   description = <<-EOT
-    OAuth client id from the Tailscale admin console. Empty disables the subnet
-    router entirely, which is the default so this stack still applies for anyone
-    who has not set Tailscale up.
+    A pre-authentication key, as the simple alternative to the OAuth client
+    below. Set one or the other, not both.
 
-    An OAuth client rather than a pasted auth key, because auth keys expire after
-    at most 90 days and OAuth client secrets do not. Terraform mints a fresh key
-    on each apply, so there is no rotation to remember.
+    This is the easy path: Settings -> Keys -> Generate auth key, with Reusable
+    yes, Ephemeral no, and tag:router. No ACL edit and no OAuth client needed.
 
-    Generate at Settings -> OAuth clients, with scope `auth_keys` (Write) and
-    tag `tag:router`. The same client can serve CI with `tag:ci`.
-  EOT
-  type        = string
-  default     = ""
-}
+    The catch is that it expires after at most 90 days, and you have to
+    replace it by hand when it does. What expiring does NOT do is knock the
+    router off the tailnet -- a node that already enrolled stays until its own
+    node key expires, and you should disable that in the console anyway. So a
+    stale key only bites when the node is rebuilt.
 
-variable "tailscale_oauth_secret" {
-  description = <<-EOT
-    The OAuth client secret. Goes in terraform.tfvars, which is gitignored.
-
-    Lands in state in plaintext like every other provider secret -- which is why
-    state is on R2 with encryption at rest rather than on a laptop.
+    Prefer the OAuth client once it is set up; OAuth secrets do not expire.
   EOT
   type        = string
   sensitive   = true

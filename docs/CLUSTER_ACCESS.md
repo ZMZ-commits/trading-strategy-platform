@@ -88,42 +88,42 @@ No payment method required.
 
 ---
 
-## 2 — OAuth client, not an auth key
+## 2 — Generate an auth key
 
-An auth key lives **at most 90 days**, so pasting one in is scheduling a chore.
-An **OAuth client secret does not expire** and can mint keys on demand, so
-Terraform generates a fresh one on every apply and there is nothing to rotate.
+Admin console -> **Settings -> Keys -> Generate auth key**
 
-The same client serves CI in step 6, so this is one credential doing two jobs.
+| Field | Value | Why |
+|---|---|---|
+| Reusable | **yes** | rebuilding the node should not need a new key |
+| Ephemeral | **no** | a subnet router must survive a reboot |
+| Tags | leave empty, or `tag:router` if the ACL is already saved | a tag that is not in `tagOwners` is rejected |
 
-Admin console -> **Settings -> OAuth clients -> Generate OAuth client**
-
-| Field | Value |
-|---|---|
-| Description | `terraform` |
-| Scopes | `auth_keys` -- **Write** |
-| Tags | `tag:router`, `tag:ci` |
-
-The secret is shown once. Into `terraform.tfvars`, which is gitignored:
+Into `infrastructure/terraform/hetzner/terraform.tfvars`, which is gitignored:
 
 ```hcl
-tailscale_oauth_client_id = "k123ABC..."
-tailscale_oauth_secret    = "tskey-client-..."
+tailscale_auth_key = "tskey-auth-..."
 ```
 
-### The expiry that actually matters
+### Why not an OAuth client
 
-There are two, and the one people worry about is not the dangerous one.
+An OAuth client secret does not expire and an auth key lasts at most 90 days, so
+OAuth looks like the better choice. It was tried and removed.
 
-| | Default | What happens |
-|---|---|---|
-| Auth key | 90 days | nothing -- an expired key does **not** de-authorize a node that already enrolled |
-| **Node key** | **180 days** | **the router drops off the tailnet**, and the cluster becomes unreachable |
+Terraform **configures every declared provider eagerly**, even when no resource
+uses it. So the `tailscale` provider could not be made conditional -- with the
+credentials unset the plan failed with "provider credentials are empty" before
+reaching any resource, and `count = 0` did not help. Supporting both paths meant
+the provider was always configured and always had to be valid.
 
-So after the first apply: admin console -> **Machines** -> the router -> **...** ->
-**Disable key expiry**. Tailscale recommends this for trusted servers and subnet
-routers, and it is the expiry that would take your access away one quiet night
-six months from now.
+The 90 days matters less than it appears. **An expired auth key does not
+de-authorize a node that already enrolled** -- the router keeps working, because
+it now has its own node key. A stale auth key only bites when that node is
+rebuilt, and the fix then is generating a new one.
+
+**The expiry that would actually take your access away is the node key**, which
+defaults to 180 days. Turn it off: admin console -> **Machines** -> the router ->
+**...** -> **Disable key expiry**. Tailscale recommends exactly this for subnet
+routers.
 
 ---
 
@@ -168,7 +168,7 @@ node is rebuilt.
 ## 4 — Your laptop
 
 ```powershell
-winget install --id tailscale.tailscale -e
+winget install --id Tailscale.Tailscale -e
 ```
 
 Sign in with the same account. Then, from a new terminal:
@@ -204,11 +204,12 @@ Admin console → **Access Controls**:
 ```json
 {
   "tagOwners": {
-    "tag:ci": ["autogroup:admin"]
+    "tag:router": ["autogroup:admin"],
+    "tag:ci":     ["autogroup:admin"]
   },
   "autoApprovers": {
     "routes": {
-      "10.0.1.0/24": ["autogroup:admin"]
+      "10.0.1.0/24": ["tag:router", "autogroup:admin"]
     }
   },
   "acls": [
@@ -225,6 +226,20 @@ Admin console → **Access Controls**:
   ]
 }
 ```
+
+**Both tags must be in `tagOwners`, and this must be saved before the apply.**
+
+A tag does not exist until `tagOwners` declares it. Ask Tailscale for a key
+carrying an undeclared tag and the API answers:
+
+```
+requested tags [tag:router] are invalid or not permitted (400)
+```
+
+`tag:router` also appears under `autoApprovers`, so the router approves its own
+advertised route. Without that the apply succeeds, Tailscale reports connected,
+and every address behind the router times out until someone ticks a box in the
+console.
 
 `autoApprovers` means a replacement subnet router is approved automatically —
 otherwise rebuilding that node silently loses cluster access until someone
