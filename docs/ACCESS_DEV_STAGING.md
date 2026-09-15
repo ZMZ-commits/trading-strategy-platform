@@ -58,6 +58,9 @@ Cloudflare dashboard → **DNS** → Records.
 
 For `api-dev`, `api-stg` and `ide`: click the grey cloud so it turns **orange**.
 
+`trading-dev` and `trading-stg` need nothing — Pages records are already proxied,
+which is why Access can protect them without any DNS change.
+
 **Leave `api` alone for now.** Production keeps working exactly as it does while
 you prove this out on the environments that can afford to break.
 
@@ -98,16 +101,35 @@ removed. You are one.
 | Application name | `tsp-non-prod` |
 | Session duration | 24 hours |
 
-Add three domains to the same application:
+Add **five** domains to the same application:
 
 ```
-api-dev.zemingzhang.com
-api-stg.zemingzhang.com
-ide.zemingzhang.com
+trading-dev.zemingzhang.com     Cloudflare Pages   the dev UI
+trading-stg.zemingzhang.com     Cloudflare Pages   the staging UI
+api-dev.zemingzhang.com         the VM             the dev API
+api-stg.zemingzhang.com         the VM             the staging API
+ide.zemingzhang.com             the VM             code-server
 ```
 
-One application covering three hostnames means one policy to maintain and one
-login for all of them.
+**Putting the UI and its API in the same application is the point, not tidiness.**
+
+You log in once, and the `CF_Authorization` cookie is issued for the whole
+application on `.zemingzhang.com` -- so the dev UI's XHR calls to the dev API
+carry it automatically. Split them across two applications and the UI loads but
+every API call returns a login page it cannot follow, and the charts silently
+stay empty.
+
+It is also the only way to protect the UI at all. `trading-dev` is served from
+Cloudflare Pages -- Cloudflare's machines, not yours -- so there is nowhere to
+put a VPN client or a firewall rule. Access is the only control that reaches it.
+
+**Note what is NOT enforceable here.** "Only allow the API to be called from the
+dev site" is not a thing HTTP can express: `Origin` and `Referer` are headers the
+client sets, and `curl -H` forges either. CORS is a rule the *browser* applies to
+*itself* -- it stops a hostile website reading your API with your session, and
+does nothing about a direct request. That is why `GET /strategies` answers curl
+today despite CORS being configured. The enforceable question is who the user is,
+which is what the policy below answers.
 
 ---
 
@@ -200,12 +222,11 @@ the firewall rule has not taken effect and Access is still bypassable.
 
 ## What to watch for afterwards
 
-**The UI calling the API cross-origin.** `trading-dev.zemingzhang.com` (Pages)
-makes XHR calls to `api-dev.zemingzhang.com` (now behind Access). The browser
-must send the `CF_Authorization` cookie with those requests, which needs CORS
-configured for credentials on both sides. **Test the dev UI end to end after
-step 6** — if charts stop loading, this is why, and the fix is putting the Pages
-hostnames behind the same Access application so one login covers both.
+**The UI calling the API cross-origin.** Handled by design — both hostnames are
+in the same Access application, so one cookie covers both. Still worth testing
+the dev UI end to end after step 6: if the page loads but charts stay empty, the
+API calls are being answered with a login page, and the cause is the two
+hostnames having ended up in different applications.
 
 **WebSockets.** `/ws/live/{ticker}` goes through Cloudflare's proxy now.
 Cloudflare handles WebSockets, but it is worth confirming the live tick feed
