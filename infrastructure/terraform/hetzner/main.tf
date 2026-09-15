@@ -75,6 +75,14 @@ locals {
     for name, a in var.agent_roles : name => "10.0.1.${a.host}"
   }
 
+  tailscale_subnet = "10.0.1.0/24"
+
+  # The router may be the server or any agent, so both are resolved and the
+  # named one picked. An unknown name fails the plan with a key error, which is
+  # the correct and harmless failure.
+  tailscale_router_public_ip = var.tailscale_router_node == var.server_name ? data.hcloud_server.server.ipv4_address : data.hcloud_server.agent[var.tailscale_router_node].ipv4_address
+  tailscale_router_ip        = var.tailscale_router_node == var.server_name ? local.server_private_ip : local.agent_private_ips[var.tailscale_router_node]
+
   all_server_ids = concat(
     [data.hcloud_server.server.id],
     [for s in data.hcloud_server.agent : s.id],
@@ -309,6 +317,65 @@ resource "terraform_data" "k3s_agent" {
     terraform_data.k3s_server,
     hcloud_server_network.agent,
   ]
+}
+
+# ----------------------------------------------------------------- tailscale
+
+# A subnet router, so CI and your laptop can reach 10.0.1.0/24 without any
+# inbound firewall rule existing.
+#
+# Both ends dial OUT to Tailscale and meet in the middle, so traffic arrives on
+# a node's PRIVATE interface -- which Hetzner cloud firewalls do not filter. The
+# firewall stays fully armed and simply never sees it. That is the whole reason
+# this exists rather than allow-listing something: allow-listing GitHub's
+# runners needs 6,980 ranges against a limit of 50 rules, and opening port 22
+# for the duration of a run leaves a rule behind whenever a job is killed.
+#
+# Skipped entirely when tailscale_auth_key is empty, so this stack still applies
+# for anyone who has not set Tailscale up.
+resource "terraform_data" "tailscale_router" {
+  count = var.tailscale_auth_key != "" ? 1 : 0
+
+  # Deliberately NOT triggered by the auth key. A pre-auth key is an enrolment
+  # credential, not configuration -- rotating it should not re-enrol a router
+  # that is already working.
+  triggers_replace = {
+    node   = local.tailscale_router_ip
+    routes = local.tailscale_subnet
+  }
+
+  connection {
+    type        = "ssh"
+    host        = local.tailscale_router_public_ip
+    user        = "root"
+    private_key = file(pathexpand(var.ssh_private_key_path))
+    timeout     = "3m"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "curl -fsSL https://tailscale.com/install.sh | sh",
+
+      # A subnet router forwards packets between interfaces, and Linux drops
+      # them silently unless told otherwise. Without this the tailnet connects
+      # and every address behind it times out -- which reads as a Tailscale
+      # problem and is not.
+      "echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-tailscale.conf",
+      "echo 'net.ipv6.conf.all.forwarding = 1' >> /etc/sysctl.d/99-tailscale.conf",
+      "sysctl -p /etc/sysctl.d/99-tailscale.conf",
+
+      # --accept-dns=false: letting Tailscale manage /etc/resolv.conf on a
+      #   Kubernetes node is a way to have a confusing DNS afternoon.
+      # --reset: makes re-running idempotent. Without it, changing the
+      #   advertised routes on an already-enrolled node is silently ignored.
+      "tailscale up --authkey='${var.tailscale_auth_key}' --advertise-routes=${local.tailscale_subnet} --accept-dns=false --reset",
+
+      "tailscale status",
+    ]
+  }
+
+  depends_on = [terraform_data.k3s_server, terraform_data.k3s_agent]
 }
 
 # -------------------------------------------------------------------- volume

@@ -139,6 +139,53 @@ variable "data_volume_gb" {
   default     = 0
 }
 
+# ----------------------------------------------------------------- tailscale
+
+variable "tailscale_auth_key" {
+  description = <<-EOT
+    Pre-authentication key from the Tailscale admin console. Empty disables the
+    subnet router entirely, which is the default so this stack still applies for
+    anyone who has not set Tailscale up.
+
+    A pre-auth key rather than the interactive flow because `tailscale up`
+    normally prints a URL for a human to open, and a provisioner has no human.
+
+    Generate at Settings -> Keys -> Generate auth key, with:
+      Reusable    yes   -- so rebuilding the node does not need a new key
+      Ephemeral   no    -- a subnet router must persist across reboots
+      Tags        tag:router
+
+    Goes in terraform.tfvars, which is gitignored. It lands in state in
+    plaintext like every other provider secret, which is why state is on R2 and
+    not on disk.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "tailscale_router_node" {
+  description = <<-EOT
+    Which node advertises the private subnet to the tailnet. Must be the
+    server_name or a key of agent_roles.
+
+    One node speaks for all four: it advertises 10.0.1.0/24, and everything on
+    the tailnet reaches every node at the private address Terraform already
+    computes. The others need nothing installed.
+
+    Defaults to the control-plane node -- the one you reach for first when
+    something is wrong, so keeping management concerns there is easier to reason
+    about.
+
+    The trade is that it is a single point of access: if this node is down, the
+    tailnet reaches nothing, including three healthy nodes. Adding a second
+    router later fixes it -- Tailscale fails over between routers advertising the
+    same range -- for another ~50 MB.
+  EOT
+  type        = string
+  default     = "trading-platform-2"
+}
+
 # ------------------------------------------------------- kubelet reservations
 #
 # k3s reserves nothing by default. Left alone, the kubelet will place pods into

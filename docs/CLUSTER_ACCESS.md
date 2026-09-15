@@ -88,60 +88,62 @@ No payment method required.
 
 ---
 
-## 2 — Subnet router on the intake node
+## 2 — Generate an auth key
 
-```bash
-ssh -i ~/.ssh/hetzner root@135.181.99.122
-```
+`tailscale up` normally prints a URL for a human to click. Terraform installs
+this, and a provisioner has no human — so it needs a pre-authentication key.
 
-Install from Tailscale's repository so it gets security updates with everything
-else:
+Admin console → **Settings → Keys → Generate auth key**
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-```
+| Field | Value | Why |
+|---|---|---|
+| Reusable | **yes** | rebuilding the node should not need a new key |
+| Ephemeral | **no** | a subnet router must survive a reboot |
+| Tags | `tag:router` | so the ACL in step 5 can name it |
 
-**Enable IP forwarding before bringing it up.** A subnet router forwards packets
-between interfaces, and Linux drops them silently by default — the symptom is
-"Tailscale says connected, `10.0.1.11` times out", which looks like a Tailscale
-problem and is not:
+Put it in `infrastructure/terraform/hetzner/terraform.tfvars` — gitignored:
 
-```bash
-printf 'net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n' \
-  | tee /etc/sysctl.d/99-tailscale.conf
-```
-
-```bash
-sysctl -p /etc/sysctl.d/99-tailscale.conf
-```
-
-Then bring it up:
-
-```bash
-tailscale up --advertise-routes=10.0.1.0/24 --accept-dns=false
-```
-
-It prints a URL. Open it and authenticate.
-
-`--accept-dns=false` because this is a server: letting Tailscale manage
-`/etc/resolv.conf` on a Kubernetes node is a way to have a confusing DNS
-afternoon.
-
-Check it:
-
-```bash
-tailscale status
+```hcl
+tailscale_auth_key = "tskey-auth-..."
 ```
 
 ---
 
-## 3 — Approve the route
+## 3 — Let Terraform install it
 
-**Until you do this, the route is advertised and unused.** This is the second
-half of the "connected but times out" trap.
+Terraform already has SSH to the nodes, so it installs Tailscale the same way it
+installed k3s. Nothing to do by hand on the machine.
 
-Admin console → **Machines** → `trading-platform-2` → the `…` menu → **Edit route
-settings** → tick `10.0.1.0/24` → Save.
+```bash
+cd infrastructure/terraform/hetzner
+terraform plan -out=tfplan
+```
+
+**Read the plan before applying.** It must be exactly:
+
+```
+Plan: 1 to add, 0 to change, 0 to destroy.
+  # terraform_data.tailscale_router[0] will be created
+```
+
+**If any `terraform_data.k3s_*` appears, stop.** That would reinstall k3s on
+running nodes, and it means something upstream of the connection block changed.
+
+```bash
+terraform apply tfplan
+```
+
+The provisioner installs Tailscale, enables IP forwarding, and brings up the
+subnet router advertising `10.0.1.0/24`.
+
+**IP forwarding is why this is worth automating.** A subnet router forwards
+packets between interfaces and Linux drops them silently unless told otherwise —
+the symptom is "Tailscale connected, `10.0.1.11` times out", which reads as a
+Tailscale problem and is not. Doing it by hand is one `sysctl` file to forget.
+
+The route also self-approves, because the ACL in step 5 lists it under
+`autoApprovers`. Without that you would approve it in the console every time the
+node is rebuilt.
 
 ---
 
@@ -170,6 +172,10 @@ permanently.
 ---
 
 ## 5 — Lock down the ACL
+
+**Paste this before step 3 if you want the route to self-approve on the first
+apply** — otherwise approve it once in the console (Machines → the node → Edit
+route settings) and this ACL keeps it approved from then on.
 
 The default tailnet policy is allow-everything. Fine for one laptop, not fine
 once a CI token exists — a compromised workflow should reach ports 22 and 6443
