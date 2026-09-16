@@ -10,14 +10,38 @@ variable "namespace" {
 }
 
 variable "strimzi_version" {
-  description = "Pinned, not left floating: an operator that upgrades itself on a re-apply can roll your brokers without being asked."
+  description = <<-EOT
+    Pinned, not left floating: an operator that upgrades itself on a re-apply
+    can roll your brokers without being asked.
+
+    Do not move this BACKWARDS below 0.49 on this cluster. 0.45.0 cannot run
+    here at all: it bundles fabric8 6.13.4, which parses the API server's
+    /version response strictly, and Kubernetes 1.33 added an `emulationMajor`
+    field that it does not know about. The operator won its leader election and
+    then died on
+
+      UnrecognizedPropertyException: Unrecognized field "emulationMajor"
+      ... Detection of Kubernetes version failed
+      ... Unable to start operator for 1 or more namespace
+
+    which looks like a crashloop with no obvious cause until you read far
+    enough up the log to see that it had already become leader. These nodes run
+    k3s 1.36.
+  EOT
   type        = string
-  default     = "0.45.0"
+  default     = "1.2.0"
 }
 
 variable "kafka_version" {
-  type    = string
-  default = "3.9.0"
+  description = <<-EOT
+    Constrained by strimzi_version, not chosen freely. Strimzi 1.2.0 ships
+    support for 4.1.0, 4.2.0, 4.2.1, 4.3.0 and 4.3.1 only -- 3.9.0 was dropped,
+    so the two variables have to move together.
+
+    Kafka 4.x is KRaft-only, which this cluster already was.
+  EOT
+  type        = string
+  default     = "4.3.1"
 }
 
 variable "kafka_name" {
