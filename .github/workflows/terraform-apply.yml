@@ -153,43 +153,51 @@ jobs:
       - name: Plan
         run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
 
-      # The firewall admits SSH only from admin_cidrs. A GitHub runner is a
-      # throwaway VM on some Azure address, so any change that makes a
-      # provisioner run cannot reach the machine -- it would hang until the SSH
-      # timeout and then fail with a connection error that says nothing useful.
+      # k3s is installed over SSH by a provisioner, so a plan that creates or
+      # destroys a terraform_data reinstalls it on that node.
+      #
+      # This was a hard refusal, on the grounds that the firewall admits SSH
+      # only from admin_cidrs and a runner's Azure address is not in it. That
+      # stopped being true in 30a3c21, when CI joined the tailnet: the apply job
+      # reaches each node's PRIVATE address, where no firewall rule applies at
+      # all, and proves it with a probe on port 22 before Terraform runs. The
+      # refusal was turning work CI can do into work only a laptop can do --
+      # which is the one place no reviewer ever sees it.
+      #
+      # Surfaced loudly rather than silently allowed. Reinstalling k3s on the
+      # control plane takes the API server down while it runs, and the reviewer
+      # should learn that here, before approving, rather than from kubectl
+      # afterwards. The required reviewer is the protection; this is the
+      # information they need in order to use it.
       #
       # Parsed as JSON rather than grepped. Terraform represents a replacement
       # as actions ["delete","create"], not the literal string "replace", so a
-      # pattern anchored on "create" misses exactly the case this guard exists
-      # for: a changed kubelet reservation or node label reinstalling k3s.
-      - name: Refuse changes that need SSH
+      # pattern anchored on "replace" misses exactly the case that matters: a
+      # changed kubelet reservation, node label, or advertise address
+      # reinstalling k3s.
+      - name: Flag changes that reinstall k3s
         run: |
           terraform show -json tfplan > plan.json
           need_ssh=$(jq '[.resource_changes[]?
                           | select(.type == "terraform_data")
                           | select(.change.actions | any(. == "create" or . == "delete"))]
                          | length' plan.json)
-          echo "resources needing SSH: $need_ssh"
+          echo "resources reinstalling over SSH: $need_ssh"
           if [ "$need_ssh" -gt 0 ]; then
             {
-              echo "### Apply blocked"
-              echo
-              echo "This plan installs or reinstalls k3s on $need_ssh node(s), which needs SSH."
-              echo "The firewall admits only \`admin_cidrs\`, and this runner is not in it."
+              echo "> [!WARNING]"
+              echo "> This plan **reinstalls k3s on $need_ssh node(s)** over SSH."
+              echo "> If the control plane is among them, the API server is unavailable while it runs."
               echo
               jq -r '.resource_changes[]?
                      | select(.type == "terraform_data")
                      | select(.change.actions | any(. == "create" or . == "delete"))
                      | "- `" + .address + "`: " + (.change.actions | join(", "))' plan.json
               echo
-              echo "Run it from a machine inside \`admin_cidrs\`:"
-              echo '```'
-              echo "cd infrastructure/terraform/hetzner"
-              echo "terraform plan -out=tfplan && terraform apply tfplan"
-              echo '```'
+              echo "The apply job reaches these nodes over the tailnet and probes port 22 first,"
+              echo "so it fails fast with a named cause rather than hanging on an SSH timeout."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::plan needs SSH to $need_ssh node(s); apply it locally (see job summary)"
-            exit 1
+            echo "::warning::plan reinstalls k3s on $need_ssh node(s); the API server will be briefly unavailable"
           fi
 
       # The reviewer approves the next job based on this. Rendered from the saved

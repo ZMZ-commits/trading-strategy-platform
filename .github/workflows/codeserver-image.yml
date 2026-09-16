@@ -1,0 +1,109 @@
+# Build the code-server image here instead of on the production VM.
+#
+# Today `deploy.yml` runs `docker compose build code-server` over SSH, which
+# means a production box carries a build toolchain, pulls from nodesource and
+# npm on every deploy, and spends its 4 GB of RAM compiling instead of serving.
+# A failed npm install there is a failed deploy.
+#
+# It also blocks the Kubernetes migration outright: Kubernetes cannot build
+# images. Every other service already has a registry copy; this was the only one
+# that did not, so it is the last thing pinning the IDE to that machine.
+#
+# Phase 6 of docs/K8S_MIGRATION.md, which notes it is worth doing even if the
+# migration stalls.
+#
+# This workflow only PUBLISHES the image. Switching the compose file to pull it
+# is a separate change, deliberately -- the image has to exist in ghcr before
+# anything is told to pull it, or the next deploy fails on a tag that was never
+# pushed.
+
+name: code-server image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/Dockerfile.codeserver"
+      - ".github/workflows/codeserver-image.yml"
+  # Built but NOT pushed on a PR. The Dockerfile installs from nodesource and
+  # npm, so it breaks for reasons that have nothing to do with this repo; a PR
+  # build catches that while it is still cheap to find out.
+  pull_request:
+    paths:
+      - "deploy/Dockerfile.codeserver"
+      - ".github/workflows/codeserver-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write # to push to ghcr.io
+
+concurrency:
+  group: codeserver-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # buildx, for the GitHub Actions layer cache below. Without it each run
+      # reinstalls Node and the Claude CLI from scratch.
+      - uses: docker/setup-buildx-action@v3
+
+      # Skipped on a PR, because a fork's token cannot write packages and there
+      # is nothing to push anyway.
+      - name: Log in to ghcr
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two tags on purpose.
+      #
+      # `prod` is what the compose file follows, so a deploy does not have to
+      # know a SHA. `sha-<commit>` is immutable, so there is always a way to say
+      # which build is running and to roll back to a specific one -- `prod`
+      # alone cannot answer either question once it has moved.
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/zmz-commits/trading-code-server
+          tags: |
+            type=raw,value=prod,enable={{is_default_branch}}
+            type=sha,format=long
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy
+          file: deploy/Dockerfile.codeserver
+          # The VM and every cluster node are amd64. Building arm64 as well
+          # would roughly double the runtime for an image nothing pulls.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### code-server image"
+            echo
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "Built only — a PR does not push."
+            else
+              echo "Pushed:"
+              echo
+              echo '```'
+              echo "${{ steps.meta.outputs.tags }}"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
