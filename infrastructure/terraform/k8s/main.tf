@@ -83,6 +83,34 @@ resource "kubectl_manifest" "kafka" {
     spec = {
       kafka = {
         version = var.kafka_version
+
+        # requests == limits, which makes the broker Guaranteed QoS.
+        #
+        # With nothing set it is BestEffort: the scheduler treats it as needing
+        # zero and places it anywhere, and the kubelet kills it FIRST under
+        # memory pressure. For the one stateful thing in the cluster that is
+        # exactly backwards -- a broker should be the last pod evicted, not the
+        # first.
+        resources = {
+          requests = { memory = var.broker_memory, cpu = var.broker_cpu_request }
+          limits   = { memory = var.broker_memory, cpu = var.broker_cpu_limit }
+        }
+
+        # Heap is deliberately about half the pod.
+        #
+        # Kafka's throughput comes from the OS page cache, not from its heap --
+        # it reads and writes through the filesystem and lets the kernel manage
+        # what stays resident. A large heap starves the very cache it depends
+        # on. Their own guidance caps the heap around 6 GB even on machines with
+        # far more, and the rest is left to the OS.
+        #
+        # -Xms == -Xmx so the JVM claims it up front rather than growing into a
+        # limit and being OOM-killed on the way.
+        jvmOptions = {
+          "-Xms" = var.broker_heap
+          "-Xmx" = var.broker_heap
+        }
+
         listeners = [
           {
             name = "plain"
@@ -143,7 +171,23 @@ resource "kubectl_manifest" "kafka" {
           "min.insync.replicas"                      = var.broker_count > 1 ? 2 : 1
         }
       }
-      entityOperator = { topicOperator = {}, userOperator = {} }
+      # Reconciles the KafkaTopic resource below into an actual topic. Small,
+      # stateless, and deliberately unpinned -- it can live on any node with
+      # room, unlike the broker whose data ties it to one machine.
+      entityOperator = {
+        topicOperator = {
+          resources = {
+            requests = { memory = "256Mi", cpu = "50m" }
+            limits   = { memory = "256Mi", cpu = "200m" }
+          }
+        }
+        userOperator = {
+          resources = {
+            requests = { memory = "256Mi", cpu = "50m" }
+            limits   = { memory = "256Mi", cpu = "200m" }
+          }
+        }
+      }
     }
   })
 }

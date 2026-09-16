@@ -118,3 +118,46 @@ variable "node_role" {
   type        = string
   default     = "stream"
 }
+
+# ------------------------------------------------------------------- sizing
+
+variable "broker_memory" {
+  description = <<-EOT
+    Memory request AND limit for each broker. Equal on purpose: that is what
+    makes the pod Guaranteed QoS, so it is evicted last rather than first.
+
+    1500Mi against an agent's ~2490Mi allocatable leaves room for the node's
+    own overhead and a little slack. Raising it past ~2000Mi means the broker
+    stops fitting and sits Pending -- a pod cannot span machines.
+  EOT
+  type        = string
+  default     = "1500Mi"
+}
+
+variable "broker_heap" {
+  description = <<-EOT
+    JVM heap, roughly half the pod.
+
+    Kafka's throughput comes from the OS page cache rather than its heap, so a
+    bigger heap starves the thing doing the work. The remainder of the pod's
+    memory is not waste -- it is where the data actually flows.
+  EOT
+  type        = string
+  default     = "768m"
+}
+
+variable "broker_cpu_request" {
+  description = "CPU the scheduler reserves. These are 2-vCPU boxes, so this is a real fraction of one."
+  type        = string
+  default     = "200m"
+}
+
+variable "broker_cpu_limit" {
+  description = <<-EOT
+    CPU ceiling. Higher than the request so the broker can burst during a
+    backlog -- CPU is compressible, so exceeding the request throttles rather
+    than kills, unlike memory.
+  EOT
+  type        = string
+  default     = "1"
+}
