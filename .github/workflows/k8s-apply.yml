@@ -1,0 +1,214 @@
+# What runs INSIDE the cluster: Strimzi, Kafka, the topic.
+#
+# Separate from terraform-apply.yml because the two stacks fail differently and
+# recover differently. hetzner/ owns machines and a firewall -- a bad apply
+# there can lock you out of everything. This one owns pods, which can be deleted
+# and recreated. Sharing a workflow would mean sharing a lock and a blast radius
+# that have nothing in common.
+#
+# Set up in GitHub: Settings -> Environments -> "k8s-apply" -> Required
+# reviewers. Without it the apply job runs ungated.
+
+name: Kubernetes Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infrastructure/terraform/k8s/**"
+      - ".github/workflows/k8s-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # NOT cancel-in-progress. Interrupting a Helm release mid-install leaves a
+  # release in a "pending-install" state that the next run refuses to touch.
+  group: k8s-apply
+  cancel-in-progress: false
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  # ---------------------------------------------------------------- preflight
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          R2_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          R2_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          KCFG: ${{ secrets.KUBECONFIG_B64 }}
+          TS_CI: ${{ secrets.TS_CI_AUTHKEY }}
+        run: |
+          missing=""
+          [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
+          [ -n "$R2_SECRET" ] || missing="$missing AWS_SECRET_ACCESS_KEY"
+          [ -n "$KCFG" ]      || missing="$missing KUBECONFIG_B64"
+          [ -n "$TS_CI" ]     || missing="$missing TS_CI_AUTHKEY"
+
+          if [ -z "$missing" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Kubernetes CI is not configured yet"
+              echo
+              echo "Skipping. Missing repository secrets:"
+              echo
+              for s in $missing; do echo "- \`$s\`"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::not configured; skipping. Missing:$missing"
+          fi
+
+  # --------------------------------------------------------------------- plan
+  # Ungated: this is what the reviewer reads before approving the apply.
+  plan:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/k8s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # The API server is on 10.0.1.10:6443, which is only reachable over the
+      # tailnet -- the firewall admits one /32 and a runner is not it.
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          args: --accept-routes
+
+      # Base64 because a kubeconfig is multi-line YAML with embedded
+      # certificates, and GitHub secrets round-trip a single blob more reliably
+      # than they do indentation.
+      - name: Write the kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > kubeconfig.yaml
+          chmod 600 kubeconfig.yaml
+          # Point it at the PRIVATE address. The stored copy names the public
+          # IP, which a runner cannot reach.
+          sed -i 's|server: https://[0-9.]*:6443|server: https://10.0.1.10:6443|' kubeconfig.yaml
+
+      - name: Wait for the API server
+        run: |
+          for i in $(seq 30); do
+            if timeout 2 bash -c "cat < /dev/null > /dev/tcp/10.0.1.10/6443" 2>/dev/null; then
+              echo "  API server reachable"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::10.0.1.10:6443 unreachable over the tailnet"
+          echo "Check the subnet route is approved and the ACL permits tag:ci on 6443." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Validate
+        run: terraform validate -no-color
+
+      - name: Plan
+        run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Publish the plan for the reviewer
+        run: |
+          {
+            echo "### Kubernetes plan — \`${{ github.sha }}\`"
+            echo
+            echo '```terraform'
+            terraform show -no-color tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------- apply
+  apply:
+    needs: [preflight, plan]
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    environment: k8s-apply
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/k8s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          args: --accept-routes
+
+      - name: Write the kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > kubeconfig.yaml
+          chmod 600 kubeconfig.yaml
+          sed -i 's|server: https://[0-9.]*:6443|server: https://10.0.1.10:6443|' kubeconfig.yaml
+
+      - name: Wait for the API server
+        run: |
+          for i in $(seq 30); do
+            timeout 2 bash -c "cat < /dev/null > /dev/tcp/10.0.1.10/6443" 2>/dev/null && exit 0
+            sleep 2
+          done
+          echo "::error::10.0.1.10:6443 unreachable over the tailnet"; exit 1
+
+      - name: Init
+        run: terraform init -input=false
+
+      # Re-planned rather than carrying a plan file across jobs: a tfplan embeds
+      # every variable value, and an artifact is readable by anyone with repo
+      # access while a secret is not.
+      - name: Apply
+        run: terraform apply -no-color -input=false -lock-timeout=5m -auto-approve
+
+      # Terraform returns as soon as the CRDs are accepted. Strimzi then builds
+      # the broker asynchronously, so "apply complete" is not "Kafka is running"
+      # -- and a broker that never schedules would otherwise look like success.
+      - name: Wait for Kafka to actually be ready
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          echo "waiting for the Kafka cluster to report Ready (up to 8 minutes)"
+          if ! kubectl -n kafka wait kafka/tsp --for=condition=Ready --timeout=480s; then
+            {
+              echo "### Kafka did not become Ready"
+              echo
+              echo '```'
+              kubectl -n kafka get pods -o wide 2>&1 | head -20
+              echo
+              kubectl -n kafka get events --sort-by=.lastTimestamp 2>&1 | tail -20
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          {
+            echo "### Kafka"
+            echo
+            echo '```'
+            kubectl -n kafka get pods -o wide 2>&1
+            echo
+            kubectl -n kafka get kafka,kafkanodepool,kafkatopic 2>&1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
