@@ -266,3 +266,19 @@ variable "eviction_threshold" {
   type        = string
   default     = "300Mi"
 }
+
+variable "private_iface" {
+  description = <<-EOT
+    The NIC carrying the Hetzner private network, and therefore the interface
+    flannel tunnels pod traffic over.
+
+    Every cx/cpx instance in this project names it enp7s0; verified on all four.
+    It is a variable rather than a literal because the name is a property of the
+    machine type, and the day one differs, a node whose flannel is pinned to an
+    interface it does not have will not start.
+
+    Get it with: ip -br addr | grep 10.0.1.
+  EOT
+  type        = string
+  default     = "enp7s0"
+}
