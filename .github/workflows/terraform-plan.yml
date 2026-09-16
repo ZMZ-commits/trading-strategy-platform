@@ -44,6 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       configured: ${{ steps.check.outputs.configured }}
+      k8s_configured: ${{ steps.check.outputs.k8s_configured }}
     steps:
       - id: check
         env:
@@ -52,6 +53,8 @@ jobs:
           HCLOUD: ${{ secrets.HCLOUD_TOKEN }}
           CIDRS: ${{ secrets.ADMIN_CIDRS }}
           TS_ROUTER: ${{ secrets.TS_ROUTER_AUTHKEY }}
+          KCFG: ${{ secrets.KUBECONFIG_B64 }}
+          TS_CI: ${{ secrets.TS_CI_AUTHKEY }}
         run: |
           missing=""
           [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
@@ -81,6 +84,28 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::notice::Terraform CI not configured; skipping plan. Missing:$missing"
+          fi
+
+          # The in-cluster stack needs a different set: it never talks to
+          # Hetzner's API, it talks to the API SERVER -- over the tailnet, with
+          # a kubeconfig. Reported separately so a missing kubeconfig does not
+          # silence the hetzner plan, and vice versa.
+          k8s_missing=""
+          [ -n "$R2_KEY" ]    || k8s_missing="$k8s_missing AWS_ACCESS_KEY_ID"
+          [ -n "$R2_SECRET" ] || k8s_missing="$k8s_missing AWS_SECRET_ACCESS_KEY"
+          [ -n "$KCFG" ]      || k8s_missing="$k8s_missing KUBECONFIG_B64"
+          [ -n "$TS_CI" ]     || k8s_missing="$k8s_missing TS_CI_AUTHKEY"
+
+          if [ -z "$k8s_missing" ]; then
+            echo "k8s_configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "k8s_configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### The in-cluster plan is not configured yet"
+              echo
+              for s in $k8s_missing; do echo "- \`$s\`"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::k8s plan not configured; skipping. Missing:$k8s_missing"
           fi
 
   # --------------------------------------------------------------------- plan
@@ -192,4 +217,157 @@ jobs:
         if: env.PLAN_FAILED == '1'
         run: |
           echo "::error::terraform plan failed - see the PR comment"
+          exit 1
+
+  # ---------------------------------------------------------------- plan-k8s
+  #
+  # The second stack, and it reviews differently from the first.
+  #
+  # hetzner/ plans against an HTTP API, so a runner needs only a token. This one
+  # plans against the cluster's own API server on 10.0.1.10:6443, which no
+  # public route reaches -- the firewall admits a single /32 and a throwaway
+  # Azure VM is not it. So this job joins the tailnet, where the private address
+  # needs no firewall rule at all.
+  #
+  # It is also the only rehearsal k8s-apply.yml ever gets. That workflow runs on
+  # `main` and nowhere else, so nothing before the merge would otherwise prove
+  # the tailnet join, the kubeconfig, the R2 backend and the provider init all
+  # work from a runner. Here they are exercised on the PR, where being wrong is
+  # cheap.
+  plan-k8s:
+    needs: preflight
+    if: needs.preflight.outputs.k8s_configured == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/k8s
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # Joins as an EPHEMERAL node, removed when the job ends -- otherwise every
+      # PR leaves one dead-but-still-authorized peer behind.
+      #
+      # --accept-routes is not optional. Without it the runner joins the tailnet
+      # and ignores the advertised 10.0.1.0/24, so the API server times out --
+      # the same symptom as an unapproved route, from a different cause.
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          args: --accept-routes
+
+      # Base64 because a kubeconfig is multi-line YAML with embedded
+      # certificates, and a GitHub secret round-trips one blob more reliably
+      # than it does indentation.
+      - name: Write the kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > kubeconfig.yaml
+          chmod 600 kubeconfig.yaml
+          # Point it at the PRIVATE address. The stored copy names the public
+          # IP, which this runner cannot reach. k3s was installed with
+          # `--tls-san 10.0.1.10`, so the certificate already covers this name.
+          sed -i 's|server: https://[0-9.]*:6443|server: https://10.0.1.10:6443|' kubeconfig.yaml
+
+      # Three seconds and a message naming the cause, rather than a provider
+      # timeout that says only that something did not answer.
+      - name: Confirm the API server is reachable
+        run: |
+          for i in $(seq 30); do
+            if timeout 2 bash -c "cat < /dev/null > /dev/tcp/10.0.1.10/6443" 2>/dev/null; then
+              echo "  API server reachable"; exit 0
+            fi
+            sleep 2
+          done
+          {
+            echo "### Cannot reach the API server over the tailnet"
+            echo
+            echo "Check, in order:"
+            echo "- the subnet route is approved (Tailscale console -> Machines -> router -> route settings)"
+            echo "- the ACL lets \`tag:ci\` reach \`10.0.1.0/24:6443\`"
+            echo "- the subnet router node is online"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::10.0.1.10:6443 unreachable over the tailnet"
+          exit 1
+
+      - name: Format check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Validate
+        run: terraform validate -no-color
+
+      - name: Plan
+        id: plan
+        run: |
+          terraform plan -no-color -input=false -lock-timeout=5m > plan.txt 2>&1 || echo "K8S_PLAN_FAILED=1" >> "$GITHUB_ENV"
+          tail -c 60000 plan.txt > plan.trimmed
+
+        continue-on-error: true
+
+      # A separate marker from the hetzner comment on purpose. The other job
+      # finds its own comment by `### Terraform plan —`; sharing a heading would
+      # mean each run overwrote the other's plan with its own.
+      - name: Comment the plan on the PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync(
+              'infrastructure/terraform/k8s/plan.trimmed', 'utf8');
+
+            const fmtOk = '${{ steps.fmt.outcome }}' === 'success';
+            const failed = process.env.K8S_PLAN_FAILED === '1';
+
+            const destroys = (plan.match(/^Plan: .* (\d+) to destroy/m) || [])[1];
+            const warn = destroys && destroys !== '0'
+              ? `\n> [!WARNING]\n> This plan **destroys ${destroys} resource(s)**. A broker's volume is \`deleteClaim: false\`, but the broker itself is not.\n`
+              : '';
+
+            const body = [
+              `### Kubernetes plan — \`infrastructure/terraform/k8s\``,
+              ``,
+              `Format: ${fmtOk ? '✅' : '⚠️ run `terraform fmt -recursive`'} · Plan: ${failed ? '❌ failed' : '✅'}`,
+              warn,
+              `<details><summary>Show plan</summary>`,
+              ``,
+              '```terraform',
+              plan,
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const mine = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('### Kubernetes plan —'));
+
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body });
+            }
+
+      - name: Fail the check if the plan failed
+        if: env.K8S_PLAN_FAILED == '1'
+        run: |
+          echo "::error::terraform plan failed for infrastructure/terraform/k8s - see the PR comment"
           exit 1
