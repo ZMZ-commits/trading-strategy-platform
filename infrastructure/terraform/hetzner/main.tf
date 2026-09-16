@@ -232,6 +232,19 @@ locals {
   #   still reported Ready, because nothing had ever been scheduled off the
   #   control plane to notice. Pinned to the private address, where no firewall
   #   rule is involved at all.
+  # --flannel-iface: which interface carries POD traffic between nodes.
+  #
+  #   Flannel encapsulates every cross-node pod packet in VXLAN on UDP 8472 and
+  #   sends it to the other node's "public-ip" annotation. Setting
+  #   --node-external-ip makes k3s fill that annotation with the PUBLIC address,
+  #   so pod traffic left eth0 for an address the firewall drops -- it admits
+  #   22 and 6443 and nothing else. Pods on different nodes simply could not
+  #   reach each other, and the symptom was a DNS timeout rather than anything
+  #   naming the network.
+  #
+  #   Naming the private NIC pins the tunnel to 10.0.1.0/24, where no firewall
+  #   rule is involved. It also keeps pod traffic off the public internet, which
+  #   VXLAN does not encrypt.
   # --tls-san: the certificate must cover both addresses, or kubectl from your
   #   laptop rejects the connection it just made.
   # --write-kubeconfig-mode 644: readable without sudo, acceptable only because
@@ -245,6 +258,7 @@ locals {
     "--write-kubeconfig-mode 644",
     "--node-ip ${local.server_private_ip}",
     "--advertise-address ${local.server_private_ip}",
+    "--flannel-iface ${var.private_iface}",
     "--node-external-ip ${data.hcloud_server.server.ipv4_address}",
     "--tls-san ${data.hcloud_server.server.ipv4_address}",
     "--tls-san ${local.server_private_ip}",
@@ -260,6 +274,7 @@ locals {
       "K3S_TOKEN='${random_password.k3s_token.result}'",
       "INSTALL_K3S_EXEC=\"agent",
       "--node-ip ${local.agent_private_ips[name]}",
+      "--flannel-iface ${var.private_iface}",
       "--node-external-ip ${data.hcloud_server.agent[name].ipv4_address}",
       "--node-label tsp.role=${a.role}",
       local.reserve_agent,
