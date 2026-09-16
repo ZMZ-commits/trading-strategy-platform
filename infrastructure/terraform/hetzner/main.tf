@@ -220,6 +220,18 @@ locals {
   #   controller fighting for :80 is a confusing first failure.
   # --node-ip: pins the cluster to the private network. Without it k3s picks the
   #   public address and flannel encapsulates node traffic across the internet.
+  # --advertise-address: the address the API server publishes for ITSELF. It
+  #   becomes the `kubernetes` Service endpoint, which is what every pod reaches
+  #   when it dials kubernetes.default.svc, and what an agent's tunnel reconnects
+  #   to after it joins.
+  #
+  #   It defaults to --node-external-ip when that is set, so leaving it off
+  #   published the PUBLIC address -- and the firewall admits 6443 only from
+  #   admin_cidrs, which the cluster's own nodes are not in. Every pod on an
+  #   agent node then timed out reaching the API server while all four nodes
+  #   still reported Ready, because nothing had ever been scheduled off the
+  #   control plane to notice. Pinned to the private address, where no firewall
+  #   rule is involved at all.
   # --tls-san: the certificate must cover both addresses, or kubectl from your
   #   laptop rejects the connection it just made.
   # --write-kubeconfig-mode 644: readable without sudo, acceptable only because
@@ -232,6 +244,7 @@ locals {
     "--disable traefik",
     "--write-kubeconfig-mode 644",
     "--node-ip ${local.server_private_ip}",
+    "--advertise-address ${local.server_private_ip}",
     "--node-external-ip ${data.hcloud_server.server.ipv4_address}",
     "--tls-san ${data.hcloud_server.server.ipv4_address}",
     "--tls-san ${local.server_private_ip}",
