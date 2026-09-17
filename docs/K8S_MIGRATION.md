@@ -101,7 +101,7 @@ downstream is against 9.1 GB.
 laptop, and `kubectl describe node | grep -A6 Allocatable` shows capacity minus
 the reservation rather than the full machine.
 
-### 2 — Remote state
+### 2 — Remote state ✅ done
 
 State moves off your laptop into Terraform Cloud or a Hetzner bucket, with
 locking.
@@ -110,6 +110,8 @@ locking.
 runner starting from empty state builds a second server.
 
 *Done when:* two `terraform plan` runs from different machines agree.
+
+Both stacks are on Cloudflare R2 with `use_lockfile`, under separate keys.
 
 ### 3 — The stateless services
 
@@ -167,7 +169,54 @@ Delete `deploy/docker-compose.yml`, `redeploy.sh`, `bootstrap.sh`. Not before.
 
 ---
 
-## CI/CD, once phase 2 is done
+## Two traps in `--node-external-ip`, both found the hard way
+
+Kafka took a full day to come up, and none of it was Kafka's fault. Two separate
+faults had been live since the cluster was built, and **both came from
+`--node-external-ip` being read as "the address other nodes should use for this
+one"** — for two different kinds of traffic.
+
+**1. The API server advertised itself publicly.** `--advertise-address` defaults
+to `--node-external-ip` when that is set, so the `kubernetes` Service endpoint
+was the *public* IP. Every pod dialling `kubernetes.default.svc` was sent to an
+address the firewall drops — it admits 22 and 6443 from `admin_cidrs` and
+nothing else. Fixed by pinning `--advertise-address` to the private IP.
+
+**2. Flannel tunnelled pod traffic publicly.** The same flag fills flannel's
+`public-ip` annotation, so cross-node pod packets were VXLAN-encapsulated on UDP
+8472 and sent to public addresses the firewall also drops. Pods on different
+nodes could not reach each other at all; the symptom was a DNS timeout. Fixed
+with `--flannel-iface`, which also keeps pod traffic — unencrypted, in VXLAN —
+off the public internet.
+
+**Why neither was noticed for a week.** Every kube-system pod runs on the
+control-plane node, where reaching the API works. The Strimzi operator was the
+first pod ever scheduled onto an agent, and it hit both at once. All four nodes
+reported `Ready` throughout.
+
+*If a pod cannot reach the API server or another node's pods, check
+`kubectl get endpoints kubernetes` and the `flannel.alpha.coreos.com/public-ip`
+node annotations first. Both should be `10.0.1.x`.*
+
+## Three more things that bit, worth knowing before the next operator
+
+- **Helm never upgrades a chart's `crds/` directory.** It writes them once. So
+  `helm upgrade` moves an operator forward and leaves its schemas behind, and
+  the new version asks for an API the cluster does not serve. `k8s-apply.yml`
+  now applies the pinned chart's CRDs before Terraform runs; before that, the
+  recovery was deleting eleven CRDs and the namespace by hand.
+- **Strimzi 1.x serves only `v1`** for kafka / kafkatopic / kafkanodepool, and
+  needs Kafka 4.x. 0.45.0 cannot run on Kubernetes 1.33+ at all: its bundled
+  fabric8 rejects the `emulationMajor` field in `/version`, so the operator wins
+  its leader election and then dies. These nodes run k3s 1.36.
+- **With node pools, the `KafkaNodePool` owns the pod spec.** `resources` and
+  `jvmOptions` set on `Kafka.spec.kafka` are silently ignored — the broker ran
+  as `BestEffort` with no limits while a block that looked authoritative sat in
+  the Kafka resource.
+
+---
+
+## CI/CD, built
 
 Two workflows per stack, because plan and apply carry opposite risk:
 
@@ -179,6 +228,16 @@ Two workflows per stack, because plan and apply carry opposite risk:
 The reviewer gate is the only protection against a bad merge, since
 `prevent_destroy` and `delete_protection` were deliberately left off. It covers
 CI only — a `terraform destroy` from a laptop never meets a reviewer.
+
+Both stacks have this now: `terraform-apply.yml` for `hetzner/` and
+`k8s-apply.yml` for `k8s/`, separate because they fail and recover differently.
+CI reaches the nodes over the tailnet, so it can install k3s over SSH — it could
+not when the workflows were written, and the guard that refused such plans
+outlived the limitation it described.
+
+**What CI still cannot do:** create a machine. The servers are `data` sources
+with no destroy verb, which is also why no bad merge can delete one. A new node
+is created in the Hetzner console first, then added to `agent_roles`.
 
 ---
 
