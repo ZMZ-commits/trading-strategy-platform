@@ -182,14 +182,22 @@ resource "kubectl_manifest" "kafka" {
       # Reconciles the KafkaTopic resource below into an actual topic. Small,
       # stateless, and deliberately unpinned -- it can live on any node with
       # room, unlike the broker whose data ties it to one machine.
+      #
+      # topicOperator only. The User Operator is deliberately absent: it manages
+      # KafkaUser resources, which only mean something when a listener has
+      # authentication. Both listeners here are plaintext with none, and no
+      # KafkaUser exists, so it started, found nothing to do, and exited 0 --
+      # which a pod with restartPolicy Always treats as a crash. It restarted
+      # eleven times, the entity-operator Deployment never went Ready, and the
+      # whole Kafka resource sat NotReady behind it:
+      #
+      #   StrimziTimeoutException: Exceeded timeout of 300000ms while waiting
+      #   for Deployment resource tsp-entity-operator to be ready
+      #
+      # The broker was fine throughout. Add this back the day a listener gains
+      # authentication and there are users to manage.
       entityOperator = {
         topicOperator = {
-          resources = {
-            requests = { memory = "256Mi", cpu = "50m" }
-            limits   = { memory = "256Mi", cpu = "200m" }
-          }
-        }
-        userOperator = {
           resources = {
             requests = { memory = "256Mi", cpu = "50m" }
             limits   = { memory = "256Mi", cpu = "200m" }
