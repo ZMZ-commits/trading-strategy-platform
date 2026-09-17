@@ -8,6 +8,13 @@ deploy/.env
 # committed. The .example file is the thing that gets shared.
 *.tfvars
 !*.tfvars.example
+# NON-secret, environment-defining values are the exception, and they are
+# tracked on purpose. CI passes only a handful of TF_VAR_* secrets, so every
+# other variable falls back to its default there -- meaning anything set only
+# in an untracked terraform.tfvars is silently reverted by the next CI apply.
+# For data_volume_gb that revert is a DESTROY. Committing the non-secret values
+# is what makes a laptop and a runner agree on what the infrastructure is.
+!*.auto.tfvars
 # Anything DERIVED from a tfvars file holds the same secrets. `*.tfvars` does
 # not match `terraform.tfvars.bak`, and a backup made during an edit was
 # committed because of exactly that gap.

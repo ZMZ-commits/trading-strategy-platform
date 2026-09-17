@@ -56,6 +56,15 @@ resource "helm_release" "strimzi" {
   wait          = true
   wait_for_jobs = true
   timeout       = 600
+
+  # Roll back a failed install instead of leaving one behind. Three dead
+  # revisions accumulated during the 0.45 -> 1.2 upgrade, each a release the
+  # next run had to reason about. atomic makes a failure leave nothing.
+  #
+  # cleanup_on_fail covers the resources within a failed upgrade, which atomic
+  # alone does not always reclaim.
+  atomic          = true
+  cleanup_on_fail = true
 }
 
 # --------------------------------------------------------------------- kafka
@@ -92,32 +101,14 @@ resource "kubectl_manifest" "kafka" {
       kafka = {
         version = var.kafka_version
 
-        # requests == limits, which makes the broker Guaranteed QoS.
+        # Sizing is NOT here. It lives on the KafkaNodePool below.
         #
-        # With nothing set it is BestEffort: the scheduler treats it as needing
-        # zero and places it anywhere, and the kubelet kills it FIRST under
-        # memory pressure. For the one stateful thing in the cluster that is
-        # exactly backwards -- a broker should be the last pod evicted, not the
-        # first.
-        resources = {
-          requests = { memory = var.broker_memory, cpu = var.broker_cpu_request }
-          limits   = { memory = var.broker_memory, cpu = var.broker_cpu_limit }
-        }
-
-        # Heap is deliberately about half the pod.
-        #
-        # Kafka's throughput comes from the OS page cache, not from its heap --
-        # it reads and writes through the filesystem and lets the kernel manage
-        # what stays resident. A large heap starves the very cache it depends
-        # on. Their own guidance caps the heap around 6 GB even on machines with
-        # far more, and the rest is left to the OS.
-        #
-        # -Xms == -Xmx so the JVM claims it up front rather than growing into a
-        # limit and being OOM-killed on the way.
-        jvmOptions = {
-          "-Xms" = var.broker_heap
-          "-Xmx" = var.broker_heap
-        }
+        # It was here, and Strimzi silently ignored it: with node pools the pool
+        # owns the pod spec, so `kubectl get pod tsp-dual-role-0` reported
+        # `resources: {}` and `qosClass: BestEffort` while this block sat in the
+        # Kafka resource looking authoritative. BestEffort is the worst possible
+        # class for the one stateful thing in the cluster -- the kubelet evicts
+        # it FIRST under memory pressure.
 
         listeners = [
           {
@@ -222,6 +213,25 @@ resource "kubectl_manifest" "node_pool" {
     spec = {
       replicas = var.broker_count
       roles    = ["controller", "broker"]
+
+      # requests == limits, which makes the broker Guaranteed QoS: evicted last
+      # rather than first. This is the spec Strimzi actually reads for a pooled
+      # node -- the identical block on Kafka.spec.kafka was ignored.
+      resources = {
+        requests = { memory = var.broker_memory, cpu = var.broker_cpu_request }
+        limits   = { memory = var.broker_memory, cpu = var.broker_cpu_limit }
+      }
+
+      # Heap is deliberately about half the pod. Kafka's throughput comes from
+      # the OS page cache, not its heap -- it reads and writes through the
+      # filesystem and lets the kernel decide what stays resident, so a large
+      # heap starves the thing doing the work. -Xms == -Xmx so the JVM claims
+      # it up front rather than growing into a limit and being OOM-killed on
+      # the way there.
+      jvmOptions = {
+        "-Xms" = var.broker_heap
+        "-Xmx" = var.broker_heap
+      }
 
       # Two placement rules, doing different jobs.
       #
