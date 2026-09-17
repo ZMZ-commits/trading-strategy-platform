@@ -79,7 +79,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Attempted twice. A single `read ECONNRESET` fetching the binary from
+      # releases.hashicorp.com failed a whole apply once; a flaky download is
+      # not a reason to abandon an infrastructure change.
       - uses: hashicorp/setup-terraform@v3
+        id: tf
+        continue-on-error: true
+        with:
+          terraform_version: "1.15.8"
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.tf.outcome == 'failure'
         with:
           terraform_version: "1.15.8"
 
@@ -146,7 +156,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Attempted twice. A single `read ECONNRESET` fetching the binary from
+      # releases.hashicorp.com failed a whole apply once; a flaky download is
+      # not a reason to abandon an infrastructure change.
       - uses: hashicorp/setup-terraform@v3
+        id: tf
+        continue-on-error: true
+        with:
+          terraform_version: "1.15.8"
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.tf.outcome == 'failure'
         with:
           terraform_version: "1.15.8"
 
@@ -169,6 +189,37 @@ jobs:
             sleep 2
           done
           echo "::error::10.0.1.10:6443 unreachable over the tailnet"; exit 1
+
+      # Helm installs a chart's crds/ directory exactly once and never upgrades
+      # it. So `helm upgrade` moves the operator forward and leaves the schemas
+      # where they were, and the new operator asks for an API version the
+      # cluster does not serve:
+      #
+      #   GET /apis/kafka.strimzi.io/v1/.../kafkas -> Not Found
+      #
+      # which surfaces as a crashloop, not as a version mismatch. Recovering
+      # from that by hand meant deleting eleven CRDs and the namespace. Applying
+      # them here makes the schemas part of the deploy instead.
+      #
+      # Server-side apply with --force-conflicts because Helm owns these fields
+      # from the original install; without it every CRD errors on a field
+      # manager conflict. Harmless when they are already current.
+      #
+      # The version is read from variables.tf rather than repeated, so it cannot
+      # drift from the chart Terraform is about to install.
+      - name: Bring the Strimzi CRDs up to the pinned version
+        run: |
+          ver=$(awk '/variable "strimzi_version"/,/^}/' variables.tf                 | grep -m1 'default' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ -z "$ver" ]; then
+            echo "::error::could not read strimzi_version from variables.tf"; exit 1
+          fi
+          echo "pinned Strimzi: $ver"
+          url="https://github.com/strimzi/strimzi-kafka-operator/releases/download/$ver/strimzi-kafka-operator-helm-3-chart-$ver.tgz"
+          curl -sSL --retry 3 --max-time 120 -o chart.tgz "$url"
+          tar xzf chart.tgz
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          kubectl apply --server-side --force-conflicts -f strimzi-kafka-operator/crds/
+          rm -rf chart.tgz strimzi-kafka-operator
 
       - name: Init
         run: terraform init -input=false
