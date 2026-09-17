@@ -64,18 +64,26 @@ resource "helm_release" "strimzi" {
 # Kubernetes provider cannot plan against a schema that did not exist when the
 # plan was made. kubectl_manifest defers that to apply time, which is the only
 # order that works on a first run.
+#
+# apiVersion is v1, not v1beta2. Strimzi 1.x serves exactly one version of each
+# of these CRDs and v1beta2 is not it -- the operator asks for
+# /apis/kafka.strimzi.io/v1/... and a cluster still holding the 0.45 CRDs
+# answers 404, which it reports as a crashloop rather than as a version
+# mismatch.
 resource "kubectl_manifest" "kafka" {
   depends_on = [helm_release.strimzi]
 
   yaml_body = yamlencode({
-    apiVersion = "kafka.strimzi.io/v1beta2"
+    apiVersion = "kafka.strimzi.io/v1"
     kind       = "Kafka"
     metadata = {
       name      = var.kafka_name
       namespace = kubernetes_namespace.kafka.metadata[0].name
+      # Vestigial as of Strimzi 1.x, kept because they cost nothing and reading
+      # their absence as "ZooKeeper" would be worse. KRaft and node pools are
+      # both mandatory now -- ZooKeeper was removed outright -- so there is no
+      # longer anything to opt into.
       annotations = {
-        # KRaft: no ZooKeeper. One less stateful thing to operate, and the
-        # only mode Strimzi carries forward.
         "strimzi.io/node-pools" = "enabled"
         "strimzi.io/kraft"      = "enabled"
       }
@@ -196,7 +204,7 @@ resource "kubectl_manifest" "node_pool" {
   depends_on = [helm_release.strimzi]
 
   yaml_body = yamlencode({
-    apiVersion = "kafka.strimzi.io/v1beta2"
+    apiVersion = "kafka.strimzi.io/v1"
     kind       = "KafkaNodePool"
     metadata = {
       name      = "dual-role"
@@ -274,7 +282,7 @@ resource "kubectl_manifest" "trades_topic" {
   depends_on = [kubectl_manifest.kafka]
 
   yaml_body = yamlencode({
-    apiVersion = "kafka.strimzi.io/v1beta2"
+    apiVersion = "kafka.strimzi.io/v1"
     kind       = "KafkaTopic"
     metadata = {
       name      = "market.trades"
