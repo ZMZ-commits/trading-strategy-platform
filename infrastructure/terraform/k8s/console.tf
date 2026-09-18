@@ -160,10 +160,25 @@ resource "kubernetes_deployment" "console" {
 # and open localhost:8080. Over the tailnet the same applies -- the service is
 # reachable from inside the cluster network without any firewall rule.
 resource "kubernetes_service" "console" {
+  # Still ClusterIP. The operator does not change that -- it runs a proxy that
+  # joins the tailnet and forwards to this Service, so nothing here is reachable
+  # from outside the tailnet and no firewall port is opened.
+  depends_on = [helm_release.tailscale_operator]
+
   metadata {
     name      = "kafka-console"
     namespace = kubernetes_namespace.kafka.metadata[0].name
     labels    = { app = "kafka-console" }
+
+    annotations = {
+      # Puts this Service on the tailnet as a machine of its own.
+      "tailscale.com/expose" = "true"
+
+      # And gives it a name, which is the entire point of choosing the operator
+      # over advertising the service range: a bookmark rather than an address
+      # to memorise.
+      "tailscale.com/hostname" = var.console_tailnet_hostname
+    }
   }
 
   spec {
