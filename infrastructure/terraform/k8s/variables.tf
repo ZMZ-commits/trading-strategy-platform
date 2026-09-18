@@ -185,3 +185,48 @@ variable "broker_cpu_limit" {
   type        = string
   default     = "1"
 }
+
+# ------------------------------------------------------------------- console
+
+variable "console_version" {
+  description = <<-EOT
+    Redpanda Console image tag. Pinned, and deliberately not `latest`.
+
+    v3.11.0 rather than v3.12.0: the latter was published the day this was
+    written, and after an afternoon spent on version skew between Strimzi,
+    fabric8 and Kubernetes 1.36, a dashboard is not worth being early for.
+  EOT
+  type        = string
+  default     = "v3.11.0"
+}
+
+variable "console_node_role" {
+  description = <<-EOT
+    Which `tsp.role` node the console is pinned to.
+
+    The observability node, which is otherwise empty. Not the stream node --
+    that one runs the broker and has roughly 700Mi left, and a dashboard has no
+    business competing with Kafka for it.
+  EOT
+  type        = string
+  default     = "observability"
+}
+
+variable "console_memory_request" {
+  description = "What the scheduler reserves. A Go binary, not a JVM, so this is a real figure rather than a guess with a heap inside it."
+  type        = string
+  default     = "128Mi"
+}
+
+variable "console_memory_limit" {
+  description = <<-EOT
+    Ceiling, above the request on purpose.
+
+    Requests below limits makes this Burstable rather than Guaranteed, which is
+    what we want: under memory pressure the kubelet should evict this before
+    anything else in the namespace. It renders a web page; the broker holds the
+    data.
+  EOT
+  type        = string
+  default     = "256Mi"
+}
