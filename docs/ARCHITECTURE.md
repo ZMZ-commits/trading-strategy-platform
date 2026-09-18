@@ -116,12 +116,30 @@ flowchart TB
 | **Caddy** | Hetzner VM, ports 80/443 | `deploy/Caddyfile` — automatic Let's Encrypt HTTPS |
 | **Engine** | nowhere (library) | `pip install` from git, pinned in the backend's `requirements.txt` |
 
-The platform repo's `infrastructure/terraform/` holds two stacks, applied in
-order: `hetzner/` builds the private network and firewall and installs k3s on
-four existing machines; `k8s/` then installs Strimzi and Kafka into the result
-through the Helm provider. They are separate because the Helm provider needs a
-kubeconfig that does not exist until the cluster does — a single combined apply
-fails at plan time.
+The platform repo's `infrastructure/terraform/` holds **three** stacks:
+
+| Stack | Owns | Applied by |
+|---|---|---|
+| `hetzner/` | Private network, firewall, k3s on four existing machines, the Tailscale subnet router | `terraform-apply.yml` |
+| `k8s/` | Strimzi, Kafka, the console, the Tailscale operator | `k8s-apply.yml` |
+| `tailscale/` | The tailnet access policy (ACL) | `tailscale-apply.yml` |
+
+`hetzner/` and `k8s/` are separate because the Helm provider needs a kubeconfig
+that does not exist until the cluster does — a single combined apply fails at
+plan time. `tailscale/` is separate for a different reason: it owns the policy
+deciding whether CI can reach the cluster at all, so folding it into the stack
+CI applies would let one plan both remove the runner's access and be the run
+depending on it.
+
+Each has its own R2 state key, so an apply in one cannot lock or corrupt
+another — the lock is per-object.
+
+**Kafka is live.** One broker (`tsp-dual-role-0`) on the `stream` node, Kafka
+4.3.1 under Strimzi 1.2.0, KRaft, topic `market.trades` with 6 partitions and
+7-day retention. Internal clients use `tsp-kafka-bootstrap.kafka.svc:9092`;
+external producers use the NodePort at `<stream-node>:30092`. Replication is 1,
+so losing that node stops ingestion — inherent to a single broker, and
+`broker_count` already derives the replication settings for three.
 
 The servers themselves are read through `data` sources, never created. A data
 source has no destroy verb, so no plan can produce one that deletes a machine —
@@ -133,7 +151,34 @@ machines were already up. See
 
 This is **new infrastructure for the streaming work**, not how the current
 services are deployed. The live path is still the Hetzner VM plus Cloudflare
-described above, driven by `docker compose` over SSH. An AWS topology
+described above, driven by `docker compose` over SSH.
+
+### Reaching the cluster
+
+Everything private goes over Tailscale. The subnet router on
+`ubuntu-4gb-hel1-2` advertises `10.0.1.0/24`, so CI and any tailnet device
+reach the nodes at their private addresses where no firewall rule applies.
+
+The Kafka console is on the tailnet as a machine of its own, published by the
+Tailscale Kubernetes operator rather than a NodePort. That is deliberate: the
+console browses every message in every topic and has no authentication, so
+Tailscale identity is the authentication — a device outside the tailnet cannot
+resolve the name, let alone reach it.
+
+| Reached how | Address |
+|---|---|
+| Kafka, in-cluster | `tsp-kafka-bootstrap.kafka.svc:9092` |
+| Kafka, external producers | `<stream-node-public-ip>:30092` (+ `:30093` per broker) |
+| Console | `kafka-console.<tailnet>.ts.net` — tailnet only |
+| Nodes (SSH, API server) | `10.0.1.10`–`.13` over the tailnet |
+
+**Two traps in `--node-external-ip`, both found the hard way.** Setting it makes
+k3s hand that public address to two different subsystems, and the firewall drops
+both. `--advertise-address` had to be pinned to the private IP or no pod could
+reach the API server; `--flannel-iface` had to name the private NIC or no pod
+could reach a pod on another node. Neither was noticed for a week because every
+kube-system pod runs on the control-plane node. See
+[`K8S_MIGRATION.md`](K8S_MIGRATION.md) for the full account. An AWS topology
 (EC2 + ECR + S3 + CloudFront) used to live here; it was never applied and has
 been removed rather than left to rot as a second answer to a question that
 already has one.
@@ -222,8 +267,9 @@ The platform repo is the orchestration + infra layer. Key files:
 | `deploy/bootstrap.sh` | One-shot fresh-VM setup (Docker, UFW, data dirs, clone) |
 | `deploy/redeploy.sh` | Rebuild/redeploy backends + pipeline from source on the VM |
 | `docker-compose.yml` (root) | Local integration: backend + UI together |
-| `infrastructure/terraform/hetzner/` | Server, network, firewall, k3s |
-| `infrastructure/terraform/k8s/` | Strimzi + Kafka, via the Helm provider |
+| `infrastructure/terraform/hetzner/` | Server, network, firewall, k3s, Tailscale subnet router |
+| `infrastructure/terraform/k8s/` | Strimzi + Kafka + console + Tailscale operator |
+| `infrastructure/terraform/tailscale/` | The tailnet ACL, adopted from the live policy |
 
 | `scripts/update-submodules.sh` | Pull latest for all submodules + commit pointers |
 
