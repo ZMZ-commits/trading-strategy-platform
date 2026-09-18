@@ -230,3 +230,46 @@ variable "console_memory_limit" {
   type        = string
   default     = "256Mi"
 }
+
+# --------------------------------------------------------- tailscale operator
+
+variable "tailscale_operator_version" {
+  description = <<-EOT
+    Tailscale operator chart version. Pinned, like everything else here.
+
+    1.102.4 matches the Tailscale client already running on the nodes and on
+    the laptop, so the tailnet is not running two versions apart for no reason.
+  EOT
+  type        = string
+  default     = "1.102.4"
+}
+
+variable "console_tailnet_hostname" {
+  description = <<-EOT
+    The name the console answers to on the tailnet, giving
+    https://<this>.<tailnet>.ts.net once the operator has registered it.
+
+    Changing it registers a NEW machine and leaves the old name behind as a
+    stale device, so it is worth settling on.
+  EOT
+  type        = string
+  default     = "kafka-console"
+}
+
+variable "ts_oauth_client_id" {
+  description = <<-EOT
+    OAuth client the operator authenticates as, tagged tag:k8s-operator.
+
+    Deliberately has NO default. An empty default would make a CI run that is
+    missing the secret plan a destroy of the operator rather than fail -- which
+    is exactly the trap documented on tailscale_auth_key in the hetzner stack,
+    where an unset value silently plans away the subnet router.
+  EOT
+  type        = string
+}
+
+variable "ts_oauth_client_secret" {
+  description = "Secret half of the operator's OAuth client. No default, for the same reason as the id."
+  type        = string
+  sensitive   = true
+}

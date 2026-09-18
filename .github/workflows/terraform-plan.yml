@@ -245,6 +245,11 @@ jobs:
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # Required by the stack, so the PR plan needs them exactly as the apply
+      # does. A plan run without them fails on a missing variable rather than
+      # showing a diff.
+      TF_VAR_ts_oauth_client_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TF_VAR_ts_oauth_client_secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
 
     steps:
       - uses: actions/checkout@v4
