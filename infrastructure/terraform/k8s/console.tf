@@ -170,15 +170,10 @@ resource "kubernetes_service" "console" {
     namespace = kubernetes_namespace.kafka.metadata[0].name
     labels    = { app = "kafka-console" }
 
-    annotations = {
-      # Puts this Service on the tailnet as a machine of its own.
-      "tailscale.com/expose" = "true"
-
-      # And gives it a name, which is the entire point of choosing the operator
-      # over advertising the service range: a bookmark rather than an address
-      # to memorise.
-      "tailscale.com/hostname" = var.console_tailnet_hostname
-    }
+    # No tailscale.com/expose here any more -- see the Ingress below. That
+    # annotation forwards the Service's own port, so the console answered on
+    # :8080 and a browser trying 80/443 timed out. The Ingress puts Tailscale
+    # Serve in front instead, which terminates HTTPS on 443.
   }
 
   spec {
@@ -189,6 +184,54 @@ resource "kubernetes_service" "console" {
       name        = "http"
       port        = 8080
       target_port = "http"
+    }
+  }
+}
+
+/**
+ * HTTPS on the tailnet, without a port.
+ *
+ * The Service annotations this replaces put the console on the tailnet at its
+ * own port -- :8080 -- because that is what they forward. Correct, and
+ * unmemorable: a browser defaults to 443 and times out against a machine that
+ * is working perfectly.
+ *
+ * ingressClassName "tailscale" hands the Service to Tailscale Serve, which
+ * listens on 443, terminates TLS with a certificate Tailscale issues for the
+ * MagicDNS name, and forwards inward. The result is a URL with nothing after
+ * the hostname.
+ *
+ * REQUIRES HTTPS certificates enabled for the tailnet (admin console -> DNS ->
+ * HTTPS Certificates). Without it the proxy comes up, the machine appears, and
+ * the certificate never issues -- the failure looks like a hang rather than a
+ * missing setting.
+ *
+ * The name comes from tls.hosts rather than an annotation: for a Tailscale
+ * Ingress that field IS the machine name, which is why there is no host on the
+ * rule below.
+ */
+resource "kubernetes_ingress_v1" "console" {
+  depends_on = [helm_release.tailscale_operator]
+
+  metadata {
+    name      = "kafka-console"
+    namespace = kubernetes_namespace.kafka.metadata[0].name
+  }
+
+  spec {
+    ingress_class_name = "tailscale"
+
+    default_backend {
+      service {
+        name = kubernetes_service.console.metadata[0].name
+        port {
+          number = 8080
+        }
+      }
+    }
+
+    tls {
+      hosts = [var.console_tailnet_hostname]
     }
   }
 }
