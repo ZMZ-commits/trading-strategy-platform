@@ -32,6 +32,13 @@ env:
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
+  # The Tailscale operator authenticates as this to put Services on the tailnet.
+  # Both variables are REQUIRED in the stack -- no defaults -- so a missing
+  # secret fails the plan outright rather than quietly planning the operator's
+  # destruction, which is the trap tailscale_auth_key documents in hetzner/.
+  TF_VAR_ts_oauth_client_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+  TF_VAR_ts_oauth_client_secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+
 jobs:
   # ---------------------------------------------------------------- preflight
   preflight:
@@ -45,12 +52,18 @@ jobs:
           R2_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           KCFG: ${{ secrets.KUBECONFIG_B64 }}
           TS_CI: ${{ secrets.TS_CI_AUTHKEY }}
+          OAUTH_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          OAUTH_SECRET: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
         run: |
           missing=""
           [ -n "$R2_KEY" ]    || missing="$missing AWS_ACCESS_KEY_ID"
           [ -n "$R2_SECRET" ] || missing="$missing AWS_SECRET_ACCESS_KEY"
           [ -n "$KCFG" ]      || missing="$missing KUBECONFIG_B64"
           [ -n "$TS_CI" ]     || missing="$missing TS_CI_AUTHKEY"
+          # Required, not optional: the operator's variables have no defaults,
+          # so an empty value fails the plan rather than being ignored.
+          [ -n "$OAUTH_ID" ]     || missing="$missing TS_OAUTH_CLIENT_ID"
+          [ -n "$OAUTH_SECRET" ] || missing="$missing TS_OAUTH_CLIENT_SECRET"
 
           if [ -z "$missing" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
