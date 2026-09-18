@@ -1,0 +1,185 @@
+# The tailnet access policy.
+#
+# A third apply workflow rather than another job in terraform-apply.yml, for the
+# same reason the stack is separate: this one owns the rules that decide whether
+# CI can reach the cluster. Sharing a workflow would mean a single run could
+# both remove the runner's access and be the run depending on it.
+#
+# It needs no tailnet membership itself -- it talks to Tailscale's public API,
+# not to any node -- so unlike the other two it joins nothing and reaches
+# nothing private.
+#
+# Set up in GitHub: Settings -> Environments -> "tailscale-apply" -> Required
+# reviewers. Without it the apply job runs ungated.
+
+name: Tailscale Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infrastructure/terraform/tailscale/**"
+      - ".github/workflows/tailscale-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tailscale-apply
+  cancel-in-progress: false
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # An OAuth client, not an API access token. Access tokens expire within 90
+  # days, and an expiring credential in CI is a pipeline that breaks one morning
+  # for a reason nobody remembers.
+  TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+  TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+
+jobs:
+  # ---------------------------------------------------------------- preflight
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          R2_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          R2_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          OAUTH_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          OAUTH_SECRET: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+        run: |
+          missing=""
+          [ -n "$R2_KEY" ]       || missing="$missing AWS_ACCESS_KEY_ID"
+          [ -n "$R2_SECRET" ]    || missing="$missing AWS_SECRET_ACCESS_KEY"
+          [ -n "$OAUTH_ID" ]     || missing="$missing TS_OAUTH_CLIENT_ID"
+          [ -n "$OAUTH_SECRET" ] || missing="$missing TS_OAUTH_CLIENT_SECRET"
+
+          if [ -z "$missing" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Tailscale CI is not configured yet"
+              echo
+              for s in $missing; do echo "- \`$s\`"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::not configured; skipping. Missing:$missing"
+          fi
+
+  # --------------------------------------------------------------------- plan
+  plan:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/tailscale
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        id: tf
+        continue-on-error: true
+        with:
+          terraform_version: "1.15.8"
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.tf.outcome == 'failure'
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Init
+        run: terraform init -input=false
+
+      # The policy already exists in the tailnet; Terraform has to be told about
+      # it before it may change it. Without this the first run plans a CREATE,
+      # which `overwrite_existing_content = false` then refuses -- correctly,
+      # but the fix is an import rather than a flag.
+      #
+      # Guarded on the state so re-runs are a no-op rather than an error.
+      - name: Adopt the existing policy if this is the first run
+        run: |
+          if terraform state list 2>/dev/null | grep -q '^tailscale_acl.this$'; then
+            echo "already in state"
+          else
+            echo "importing the live policy"
+            terraform import -input=false tailscale_acl.this acl
+          fi
+
+      - name: Plan
+        run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
+
+      # Removals are the thing that must not be skimmed past here. Losing
+      # tag:ci stops the pipeline reaching the cluster; losing tag:router's
+      # autoApprovers stops the tailnet routing to it. Both are recoverable
+      # only by hand in the console, so they are called out rather than left
+      # for the reviewer to spot in a wall of policy.
+      - name: Publish the plan, and flag removals
+        run: |
+          {
+            echo "### Tailnet policy plan — \`${{ github.sha }}\`"
+            echo
+            if terraform show -no-color tfplan | grep -qE '^\s+-\s'; then
+              echo "> [!WARNING]"
+              echo "> This plan REMOVES lines from the access policy. Check whether"
+              echo "> \`tag:ci\` or \`tag:router\` are affected before approving."
+              echo
+            fi
+            echo '```terraform'
+            terraform show -no-color tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------- apply
+  apply:
+    needs: [preflight, plan]
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    environment: tailscale-apply
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/tailscale
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        id: tf
+        continue-on-error: true
+        with:
+          terraform_version: "1.15.8"
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.tf.outcome == 'failure'
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Adopt the existing policy if this is the first run
+        run: |
+          if terraform state list 2>/dev/null | grep -q '^tailscale_acl.this$'; then
+            echo "already in state"
+          else
+            terraform import -input=false tailscale_acl.this acl
+          fi
+
+      - name: Apply
+        run: terraform apply -no-color -input=false -lock-timeout=5m -auto-approve
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Tailnet policy applied"
+            echo
+            echo '```'
+            terraform state list 2>&1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
