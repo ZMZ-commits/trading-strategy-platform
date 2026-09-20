@@ -28,6 +28,19 @@ services:
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY:-}
       - ALPACA_FEED=${ALPACA_FEED:-iex}
       - SYMBOLS=${SYMBOLS:-AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL,META,SPY}
+      # Durable copy of every tick, alongside the Redis live path. Empty by
+      # default, and empty means OFF -- the pipeline logs "Redis only" and
+      # behaves exactly as it did before. Set it in deploy/.env to turn on:
+      #
+      #   KAFKA_BOOTSTRAP=62.238.111.151:30092
+      #
+      # That is the NodePort on the cluster's stream node. It is the external
+      # address because this container runs on the VM, outside the cluster.
+      # When the pipeline itself moves into the cluster (Phase 3 of
+      # docs/K8S_MIGRATION.md) this becomes the internal service name,
+      # tsp-kafka-bootstrap.kafka.svc:9092, and the NodePorts can close again.
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP:-}
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-market.trades}
     depends_on:
       - redis
     networks:

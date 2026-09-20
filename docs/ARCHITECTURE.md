@@ -25,7 +25,7 @@ separate deployable (or importable) unit, wired together at the platform layer.
 | [`trading-strategy-ui`](https://github.com/zmz-commits/trading-strategy-ui) | Dashboard SPA | React 18 + Vite + TypeScript + TailwindCSS + lightweight-charts | Cloudflare Pages (static) |
 | [`trading-strategy-backend`](https://github.com/zmz-commits/trading-strategy-backend) | API hub | Python + FastAPI | Docker on Hetzner VM (3 envs) |
 | [`trading-strategy-engine`](https://github.com/zmz-commits/trading-strategy-engine) | Strategy runner | Python (pydantic) | **pip package imported by backend** (not a service) |
-| [`trading-strategy-data-pipeline`](https://github.com/zmz-commits/trading-strategy-data-pipeline) | Live tick ingestion | Python + alpaca-py + redis | Docker on Hetzner VM (1 shared instance) |
+| [`trading-strategy-data-pipeline`](https://github.com/zmz-commits/trading-strategy-data-pipeline) | Live tick ingestion | Python + alpaca-py + redis + confluent-kafka | Docker on Hetzner VM (1 shared instance) |
 | [`trading-strategy-platform`](https://github.com/zmz-commits/trading-strategy-platform) | Infra hub / monorepo | Bash + Terraform + Docker Compose + Caddy | N/A — orchestration & docs |
 
 Per-repo deep dives:
@@ -74,6 +74,13 @@ flowchart TB
 
   PIPE -- "one persistent stream" --> ALP
   PIPE -- "publish ticks:SYMBOL + cache price:SYMBOL" --> REDIS
+  PIPE -- "produce, keyed by symbol" --> KAFKA
+
+  subgraph K8S["k3s cluster (4 nodes, Hetzner)"]
+    KAFKA[("Kafka<br/>market.trades, 7-day retention")]
+    KUI["Redpanda Console<br/>tailnet-only"]
+  end
+  KUI --> KAFKA
 ```
 
 ### Four end-to-end flows
@@ -91,6 +98,26 @@ flowchart TB
    backend's `/ws/live/{ticker}` subscribes to that Redis channel and fans each
    tick out to connected browsers. On connect it first sends the cached price so
    the chart isn't blank. UI hook: `useLiveTicks`.
+
+   The same tick is **also** produced to Kafka `market.trades`, keyed by symbol.
+   Redis and Kafka are not alternatives and neither replaces the other:
+
+   - **Redis** answers *what is happening now*. Pub/sub pushes to whoever is
+     listening at that instant, and a subscriber connecting a second later never
+     learns the tick happened. `GET price:{SYMBOL}` is an O(1) lookup, which is
+     what lets a chart show a number immediately instead of waiting for the next
+     trade.
+   - **Kafka** answers *what happened*. Every tick is kept for seven days,
+     replayable from any offset, which is what backtests and bar-building need
+     and what Redis structurally cannot provide.
+
+   Keyed by symbol because Kafka orders within a partition, not across a topic,
+   and a key always hashes to the same partition. A bar built from out-of-order
+   ticks has the wrong high and low.
+
+   Kafka is opt-in via `KAFKA_BOOTSTRAP`. Unset, the pipeline is Redis-only and
+   behaves exactly as it did before. `FanoutStore` isolates failures per store,
+   so an unreachable broker costs history, never the live path.
 
 3. **Strategy CRUD** (REST)
    `UI` → `backend` `/strategies` → `strategy_store` writes a per-strategy
@@ -113,6 +140,8 @@ flowchart TB
 | **Backend (×3)** | Hetzner VM, Docker images `ghcr.io/zmz-commits/trading-strategy-backend:{prod,stg,dev}` | GitHub Actions build → GHCR → SSH deploy; or `deploy/redeploy.sh` on the VM |
 | **Data pipeline (×1)** | Hetzner VM, Docker image `…/trading-strategy-data-pipeline:latest` | Same CI pattern; **one** instance shared by all 3 backends |
 | **Redis** | Hetzner VM (`redis:7-alpine`) | `deploy/docker-compose.yml` |
+| **Kafka** | k3s cluster, `stream` node, via Strimzi | `infrastructure/terraform/k8s/` |
+| **Kafka console** | k3s cluster, `observability` node, tailnet-only | `infrastructure/terraform/k8s/console.tf` |
 | **Caddy** | Hetzner VM, ports 80/443 | `deploy/Caddyfile` — automatic Let's Encrypt HTTPS |
 | **Engine** | nowhere (library) | `pip install` from git, pinned in the backend's `requirements.txt` |
 
