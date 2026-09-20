@@ -13,6 +13,11 @@ on:
     branches: [main]
     paths:
       - 'deploy/**'
+      # And on changes to this file. Without it, editing the workflow does not
+      # run it -- the change reaches main and nothing happens, which is exactly
+      # what occurred when .env generation was added here and had to be
+      # dispatched by hand.
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 jobs:
