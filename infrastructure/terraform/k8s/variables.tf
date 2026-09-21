@@ -94,9 +94,26 @@ variable "topic_partitions" {
 }
 
 variable "retention_days" {
-  description = "How far back the bot can replay. Disk is the only cost."
+  description = <<-EOT
+    How far back the bot can replay. Disk is the only cost -- messages live in
+    files on the broker's volume, not in memory.
+
+    30 rather than 7 because there is no archive yet and one broker holds the
+    only copy. Retention is a deletion timer: whatever it does not cover is
+    gone, silently and on schedule. Alpaca's free tier does not necessarily let
+    you re-fetch trade-level history, so a week of margin is thinner than it
+    sounds -- notice on day eight that day one mattered and it is already gone.
+
+    The cost is nothing at this volume. Eight symbols on the IEX feed against a
+    10Gi volume is not close to a constraint; the topic held 592 bytes when this
+    was raised. Revisit if the feed moves to SIP, where volume is 30-50x and the
+    arithmetic stops being free.
+
+    Shorten this once ticks are landing in TimescaleDB, at which point Kafka
+    becomes a hot buffer rather than the system of record.
+  EOT
   type        = number
-  default     = 7
+  default     = 30
 }
 
 variable "broker_count" {
