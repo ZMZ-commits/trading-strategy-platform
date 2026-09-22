@@ -162,13 +162,23 @@ resource "hcloud_firewall" "cluster" {
     source_ips = var.admin_cidrs
   }
 
+  # NOT 0.0.0.0/0, which is what this was.
+  #
+  # These ports carry Kafka's external listener, and that listener has
+  # `tls: false` and no authentication -- so open to the world meant anyone
+  # who found the port could read every tick, write fake trades into
+  # market.trades, or delete the topic outright. A strategy consuming data an
+  # attacker can inject is worse than a strategy with no data.
+  #
+  # Only the machines that actually produce need in, which today is the VM
+  # running the pipeline. Nothing else has any business reaching a broker.
   dynamic "rule" {
     for_each = var.public_tcp_ports
     content {
       direction  = "in"
       protocol   = "tcp"
       port       = rule.value
-      source_ips = ["0.0.0.0/0", "::/0"]
+      source_ips = var.public_tcp_source_ips
     }
   }
 }

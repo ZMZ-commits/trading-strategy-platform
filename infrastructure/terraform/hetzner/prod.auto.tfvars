@@ -26,3 +26,13 @@ public_tcp_ports = ["30092", "30093"]
 # destroy verb. Writing it down means a future change to it is a visible diff
 # rather than a default quietly changing underneath a plan.
 data_volume_gb = 0
+
+# Who may reach public_tcp_ports (Kafka's external listener).
+#
+# The VM at 37.27.41.226 runs the data pipeline and is the only external
+# producer. The listener has no TLS and no authentication, so this list is the
+# only thing standing between the broker and the internet.
+#
+# Shrinks to nothing when the pipeline moves into the cluster and uses
+# tsp-kafka-bootstrap.kafka.svc:9092 instead.
+public_tcp_source_ips = ["37.27.41.226/32"]
