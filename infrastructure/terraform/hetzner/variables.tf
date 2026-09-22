@@ -133,6 +133,29 @@ variable "public_tcp_ports" {
   default     = []
 }
 
+variable "public_tcp_source_ips" {
+  description = <<-EOT
+    Who may reach public_tcp_ports. NO DEFAULT, deliberately.
+
+    This was hardcoded to 0.0.0.0/0. The ports it governs carry Kafka's
+    external listener, which runs with tls = false and no authentication, so
+    "open to the world" meant anyone who found the port could read every tick,
+    produce fake trades, or delete the topic. Requiring an answer is the point:
+    a firewall source is not a thing to inherit from a default.
+
+    Today that is the VM running the data pipeline, the only external producer.
+    It should shrink to nothing once the pipeline moves into the cluster and
+    uses the internal bootstrap address, at which point public_tcp_ports can
+    empty out entirely and this stops mattering.
+  EOT
+  type        = list(string)
+
+  validation {
+    condition     = !contains(var.public_tcp_source_ips, "0.0.0.0/0")
+    error_message = "0.0.0.0/0 exposes an unauthenticated Kafka listener to the internet. Name the producers instead."
+  }
+}
+
 variable "data_volume_gb" {
   description = "Persistent volume attached to the data node, for TimescaleDB. 0 to skip. Survives the machine; a boot disk does not."
   type        = number
