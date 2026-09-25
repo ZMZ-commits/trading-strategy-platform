@@ -17,13 +17,29 @@ nowhere else** — not in git, not on a laptop. It is mounted by five containers
 and it is the single highest-value thing on that machine.
 
 ```bash
-ssh <vm> 'docker run --rm -v workspace:/w -v /tmp:/out alpine \
+ssh <vm> 'docker run --rm -v deploy_workspace:/w -v /tmp:/out alpine \
   tar czf /out/workspace-backup.tgz -C /w .'
 scp <vm>:/tmp/workspace-backup.tgz .
 ```
 
-Do this first, verify the tarball opens, and keep it off the server. Every other
-step in this document is reversible; losing that volume is not.
+The volume is `deploy_workspace`, NOT `workspace`. Compose prefixes volume names
+with the project directory, and `docker run -v workspace:/w` does not fail on a
+name that does not exist -- it CREATES an empty volume and archives that. This
+command said `workspace` and would have produced a valid, listable, 4 KB tarball
+of nothing. Confirm the source against what the container actually mounts:
+
+    ssh <vm> 'docker inspect code-server --format "{{range .Mounts}}{{.Name}} {{.Destination}} {{end}}"'
+
+Do this first and keep it off the server. Every other step in this document is
+reversible; losing that volume is not.
+
+**Verify by extracting, not by listing.** `tar tzf` succeeds on an archive of the
+wrong thing, so it proves nothing about the contents:
+
+    tar xzf workspace-backup.tgz -C /tmp/verify
+    find /tmp/verify -name strategy.py | wc -l   # expect 11
+
+*Taken and verified 2026-09-24: 11 strategies, 12.6 KB, extracted and read.*
 
 ---
 

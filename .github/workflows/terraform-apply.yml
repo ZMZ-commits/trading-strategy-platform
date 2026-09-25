@@ -220,6 +220,14 @@ jobs:
     needs: [preflight, plan]
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
+    # An un-approved run holds the concurrency group above, and
+    # cancel-in-progress is false -- so without a deadline one
+    # forgotten approval blocks EVERY later apply, silently and
+    # indefinitely. A run sat waiting six days and wedged the queue
+    # behind it; three subsequent runs looked like GitHub being
+    # flaky. 12 hours is long enough to approve deliberately and
+    # short enough that forgetting costs a re-run, not a week.
+    timeout-minutes: 720
     environment: terraform-apply
     defaults:
       run:
