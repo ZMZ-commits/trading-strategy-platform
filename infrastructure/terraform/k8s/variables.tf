@@ -290,3 +290,58 @@ variable "ts_oauth_client_secret" {
   type        = string
   sensitive   = true
 }
+
+# --------------------------------------------------- phase 3: app services
+
+variable "platform_namespace" {
+  description = <<-EOT
+    Namespace for the application services, separate from `kafka`.
+
+    Kafka is infrastructure with an operator that reconciles anything in its
+    namespace; the backends are workloads. Keeping them apart means deleting
+    one never reaches the other, and `kubectl get pods -n tsp` answers a
+    different question from `-n kafka`.
+  EOT
+  type        = string
+  default     = "tsp"
+}
+
+variable "redis_image" {
+  description = "Pinned, like everything else. Matches what the VM runs today."
+  type        = string
+  default     = "redis:7-alpine"
+}
+
+variable "backend_image" {
+  description = "Repository for the backend image. The tag comes from var.backends, one per environment."
+  type        = string
+  default     = "ghcr.io/zmz-commits/trading-strategy-backend"
+}
+
+variable "backends" {
+  description = <<-EOT
+    The three backend environments, which differ in exactly two things: the
+    image tag and the CORS origin. Everything else about them is identical,
+    which is why they come from one resource rather than three.
+
+    They are NOT reachable from the internet in phase 3 -- no ingress exists
+    and 80/443 are not open in the firewall. The CORS origins are set now
+    because they belong to the environment definition, not because anything is
+    serving those hostnames from here yet. The VM still is.
+  EOT
+  type = map(object({
+    tag         = string
+    cors_origin = string
+  }))
+  default = {
+    prod = { tag = "prod", cors_origin = "https://trading.zemingzhang.com" }
+    stg  = { tag = "stg", cors_origin = "https://trading-stg.zemingzhang.com" }
+    dev  = { tag = "dev", cors_origin = "https://trading-dev.zemingzhang.com" }
+  }
+}
+
+variable "sandbox_image" {
+  description = "Executes published indicator code on demand. Pinned to the tag compose uses."
+  type        = string
+  default     = "ghcr.io/zmz-commits/trading-strategy-sandbox:prod"
+}
