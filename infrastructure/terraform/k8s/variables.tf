@@ -345,3 +345,43 @@ variable "sandbox_image" {
   type        = string
   default     = "ghcr.io/zmz-commits/trading-strategy-sandbox:prod"
 }
+
+# ------------------------------------------------- phase 4: storage
+
+variable "platform_node_role" {
+  description = <<-EOT
+    Which `tsp.role` node the workspace-sharing pods are pinned to.
+
+    They must all be on ONE node: local-path is ReadWriteOnce, a volume is a
+    directory on a single node's disk, and four pods mount the workspace. Before
+    pinning they were spread across three nodes, which would have left three of
+    them Pending on an affinity error that never mentions storage.
+
+    `data` rather than `stream`, which runs the broker and has the least room,
+    and it puts the backends beside Redis.
+
+    The cost is no spreading: lose this node and all three backends and the
+    sandbox go with it. Accepted because the alternative is a replicated
+    storage system on a cluster with 9.1Gi of memory in total.
+  EOT
+  type        = string
+  default     = "data"
+}
+
+variable "workspace_pvc_size" {
+  description = "Shared strategies and indicators. 124Ki today; local-path does not enforce the request, so this is a statement of intent."
+  type        = string
+  default     = "1Gi"
+}
+
+variable "store_pvc_size" {
+  description = "Per-environment strategy JSON (STORE_ROOT). Tens of KB today."
+  type        = string
+  default     = "1Gi"
+}
+
+variable "dataset_pvc_size" {
+  description = "Per-environment OHLCV datasets and backtest results. ~11Mi at the largest today, and the one most likely to grow."
+  type        = string
+  default     = "5Gi"
+}
