@@ -137,6 +137,24 @@ resource "kubernetes_deployment" "backend" {
     template {
       metadata { labels = { app = "backend", env = each.key } }
       spec {
+        # Pinned so every pod sharing the workspace PVC lands on one node.
+        # local-path is ReadWriteOnce and a volume lives on a single node's
+        # disk, so without this three of the four pods that mount it stay
+        # Pending with an affinity message that never says "storage".
+        affinity {
+          node_affinity {
+            required_during_scheduling_ignored_during_execution {
+              node_selector_term {
+                match_expressions {
+                  key      = "tsp.role"
+                  operator = "In"
+                  values   = [var.platform_node_role]
+                }
+              }
+            }
+          }
+        }
+
         container {
           name  = "backend"
           image = "${var.backend_image}:${each.value.tag}"
@@ -217,17 +235,23 @@ resource "kubernetes_deployment" "backend" {
 
         volume {
           name = "store"
-          empty_dir {}
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.store[each.key].metadata[0].name
+          }
         }
 
         volume {
           name = "workspace"
-          empty_dir {}
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.workspace.metadata[0].name
+          }
         }
 
         volume {
           name = "datasets"
-          empty_dir {}
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.datasets[each.key].metadata[0].name
+          }
         }
       }
     }
@@ -282,6 +306,21 @@ resource "kubernetes_deployment" "sandbox" {
     template {
       metadata { labels = { app = "sandbox" } }
       spec {
+        # Same node as the backends: it mounts the same workspace PVC.
+        affinity {
+          node_affinity {
+            required_during_scheduling_ignored_during_execution {
+              node_selector_term {
+                match_expressions {
+                  key      = "tsp.role"
+                  operator = "In"
+                  values   = [var.platform_node_role]
+                }
+              }
+            }
+          }
+        }
+
         container {
           name  = "sandbox"
           image = var.sandbox_image
@@ -321,9 +360,16 @@ resource "kubernetes_deployment" "sandbox" {
           }
         }
 
+        # The same claim the backends mount, and still READ-ONLY at the mount
+        # above. That is a security boundary rather than tidiness: this process
+        # executes user-authored code and must not be able to modify the
+        # registry it executes from.
         volume {
           name = "registry"
-          empty_dir {}
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.workspace.metadata[0].name
+            read_only  = true
+          }
         }
       }
     }
