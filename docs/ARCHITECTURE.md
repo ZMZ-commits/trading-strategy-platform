@@ -9,7 +9,7 @@
 > the read-order, how to recompute "what's the latest branch" from live git, and
 > the protocol for keeping these docs current.
 >
-> **Last synced to git:** 2026-06-13 (see [Live state dashboard](#live-state-dashboard) — always re-verify with the one-liner there).
+> **Last synced to git:** 2026-10-24 (see [Live state dashboard](#live-state-dashboard) — always re-verify with the one-liner there, **and with a content diff**, which is what caught the engine's drift).
 
 ---
 
@@ -213,27 +213,58 @@ Full rules: [`../CLAUDE.md`](../CLAUDE.md).
 >   latest=$(for b in dev staging main; do \
 >     echo "$(git -C F:/Projects/$r log -1 --format='%ct' origin/$b) $b"; \
 >   done | sort -rn | head -1 | awk '{print $2}')
->   echo "$r → newest branch = $latest"
+>   # Commit times alone miss a branch that is behind in CONTENT while looking
+>   # promoted. This is what caught the engine's missing GHCR login.
+>   drift=$(git -C "F:/Projects/$r" diff origin/dev origin/main --stat | wc -l)
+>   echo "$r → newest = $latest; dev↔main content diff = $drift files"
 > done
 > ```
 >
 > **Rule:** the "latest" code is whichever branch has the newest commit, *not*
 > always `main`. If `staging`/`dev` is ahead of `main`, that branch holds the
 > freshest, not-yet-promoted work.
+>
+> **Second rule, learned the hard way:** a content diff of 0 is the real "fully
+> promoted". A non-zero one means a change skipped a branch — which the commit
+> timestamps cannot show you.
 
-**Snapshot — 2026-06-13:**
+**Snapshot — 2026-10-24:**
 
-| Repo | Newest branch | Note |
-|------|---------------|------|
-| platform | `main` | fully promoted up the chain |
-| backend | `main` | fully promoted (`dev` 12 commits behind `main`) |
-| data-pipeline | `main` | fully promoted |
-| engine | `main` | fully promoted |
-| **ui** | **`staging`** | ⚠️ **2 commits ahead of `main`, not yet in prod** — see below |
+`main` is newest in **all five** repos — nothing is sitting unpromoted. The
+commit counts below look alarming and mostly are not: a merge PR up the chain
+leaves its merge commit on the target, so `dev` is always "behind" `main` by
+the merge commits it never receives. **Compare content, not counts:**
+`git diff origin/dev origin/main --stat`.
 
-**UI: unreleased to production (`staging` ∖ `main`):**
-- `feat(ui): responsive, touch-friendly layout for phones & tablets`
-- `fix(ui): hide floating market widget on mobile`
+| Repo | Newest | `main`/`dev` commits | Content differs? |
+|------|--------|---------------------|------------------|
+| platform | `main` | 83 / 0 | no |
+| backend | `main` | 38 / 0 | no |
+| data-pipeline | `main` | 7 / 0 | no |
+| **engine** | `main` | 22 / 0 | ⚠️ **yes — see below** |
+| ui | `main` | 52 / 0 | no |
+
+**⚠️ engine: `dev` is missing a fix that `staging` and `main` both have.**
+
+Commit `ad61525` *"fix: add GHCR docker login to VM deploy step"* (2026-06-11)
+adds a `docker login ghcr.io` to all three of the engine's deploy workflows. It
+is on `staging` and `main`. It is **not** on `dev` — it was made on `staging`
+and promoted up, and never came back down.
+
+So the engine's `dev` branch carries three deploy workflows that do not
+authenticate to GHCR. Two consequences, neither loud:
+
+- a deploy from `dev` pulls unauthenticated, which works right up until the
+  package stops being public;
+- the next feature branch cut from `dev` that touches those files will conflict
+  on the way back up, or silently revert the fix.
+
+**Fix:** back-merge `main` into `dev` on a `feature/*` branch and PR it
+(`dev` is protected — no direct push). Not done yet.
+
+*This is the failure mode the one-liner above cannot see*: it compares commit
+*times*, and by that measure the engine looks fully promoted. Only the content
+diff shows it.
 
 For each repo's detailed living changelog, see its `AI_CONTEXT.md` →
 "Latest Changes (Living)".
