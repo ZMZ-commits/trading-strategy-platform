@@ -1,0 +1,150 @@
+# Cancel runs that have been sitting unapproved too long.
+#
+# THE BUG THIS ACTUALLY FIXES
+#
+# Every gated apply here (`terraform-apply`, `k8s-apply`, `tailscale-apply`,
+# `data-migrate`) shares a `concurrency` group with `cancel-in-progress: false`.
+# That pairing is correct -- two Terraform applies running at once fight over a
+# state lock, and cancelling one mid-apply is worse than queueing it. But it
+# means a run parked at its approval gate holds the group, and everything after
+# it queues behind a run that is doing nothing.
+#
+# It happened: a run sat `waiting` from 2026-09-18 for six days. Three later
+# runs looked like GitHub being flaky, and were cancelled as such, twice, by me.
+#
+# `timeout-minutes: 720` was added to those jobs to bound it. IT DOES NOT WORK.
+# A job's timeout covers time spent RUNNING; a run held at a deployment
+# protection rule has not started the job, so the clock never begins. The proof
+# is in the repo's own history -- a run created after that "fix" was still
+# `waiting` eleven days later. The comments on those jobs have been corrected to
+# say so, because a comment claiming a fix that does not work is worse than no
+# comment.
+#
+# WHY CANCELLING IS SAFE HERE, AND WOULD NOT BE OTHERWISE
+#
+# This only ever touches runs whose status is `waiting`, which in GitHub Actions
+# means specifically "held by a deployment protection rule". Such a run has
+# executed none of the gated job: no `terraform apply`, no `kubectl`, no state
+# lock taken. Cancelling it destroys nothing and leaves nothing half-applied.
+#
+# `queued` is the different state -- waiting for a runner -- and is deliberately
+# NOT matched. Nor is `in_progress`: cancelling an apply mid-flight is exactly
+# the dangerous thing `cancel-in-progress: false` exists to prevent, and this
+# workflow must never become a way of doing it by accident.
+#
+# A cancelled run is not lost work. The plan is re-derived on re-run, and a plan
+# twelve hours stale is one you should want re-derived before it applies.
+
+name: Reap Stale Approvals
+
+on:
+  schedule:
+    # Every two hours, off the hour. A twelve-hour threshold does not need
+    # minute precision, and the top of the hour is when everyone else's cron
+    # fires.
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        description: "Cancel waiting runs older than this many hours"
+        type: string
+        default: "12"
+      dry_run:
+        description: "List what would be cancelled, cancel nothing"
+        type: boolean
+        default: true
+
+# Not grouped with the applies -- the whole point is that this runs while one of
+# them is stuck. Grouped with itself, so two schedules cannot race.
+concurrency:
+  group: reap-stale-approvals
+  cancel-in-progress: false
+
+permissions:
+  actions: write # to cancel runs
+  contents: read
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Cancel waiting runs past the threshold
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # On a schedule there are no inputs, so both fall back to the
+          # defaults: 12 hours, and NOT a dry run -- a scheduled reaper that
+          # only ever reports would leave the queue exactly as wedged as it
+          # found it.
+          MAX_AGE_HOURS: ${{ inputs.max_age_hours || '12' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          cutoff=$(( $(date -u +%s) - MAX_AGE_HOURS * 3600 ))
+          echo "Cutoff: $(date -u -d "@$cutoff" '+%Y-%m-%dT%H:%M:%SZ') (${MAX_AGE_HOURS}h ago)"
+          echo "Dry run: $DRY_RUN"
+          echo
+
+          # --status waiting is the precise filter: held by a deployment
+          # protection rule, as opposed to `queued`, which is waiting for a
+          # runner and must be left alone.
+          runs=$(gh run list --repo "$REPO" --status waiting --limit 100 \
+                   --json databaseId,createdAt,workflowName,displayTitle,url)
+
+          total=$(jq 'length' <<<"$runs")
+          echo "Runs currently waiting: $total"
+
+          reaped=0
+          spared=0
+
+          # Read the whole list first rather than cancelling inside a pipeline:
+          # a `gh run cancel` failure mid-stream would otherwise abort the loop
+          # and leave later runs unexamined.
+          while IFS=$'\t' read -r id created wf title url; do
+            [ -z "${id:-}" ] && continue
+            age_s=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+            age_h=$(( age_s / 3600 ))
+            if [ "$(date -u -d "$created" +%s)" -gt "$cutoff" ]; then
+              echo "  spared  ${id}  ${age_h}h  ${wf} -- ${title}"
+              spared=$(( spared + 1 ))
+              continue
+            fi
+            echo "  STALE   ${id}  ${age_h}h  ${wf} -- ${title}"
+            echo "          $url"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "          (dry run, not cancelled)"
+              continue
+            fi
+            # Non-fatal on purpose. A run that a human approved or cancelled in
+            # the seconds since the listing will fail here, and that is a race
+            # resolving itself correctly -- not a reason to abandon the rest.
+            if gh run cancel "$id" --repo "$REPO"; then
+              echo "          cancelled"
+              reaped=$(( reaped + 1 ))
+            else
+              echo "::warning::could not cancel run $id (already approved, cancelled, or finished)"
+            fi
+          done < <(jq -r '.[] | [.databaseId, .createdAt, .workflowName, .displayTitle, .url] | @tsv' <<<"$runs")
+
+          {
+            echo "### Stale approval reaper"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Threshold | ${MAX_AGE_HOURS}h |"
+            echo "| Waiting runs seen | $total |"
+            echo "| Within threshold | $spared |"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "| Cancelled | 0 (dry run) |"
+            else
+              echo "| Cancelled | $reaped |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$reaped" -gt 0 ]; then
+            echo
+            echo "::notice::cancelled $reaped run(s) stuck waiting for approval past ${MAX_AGE_HOURS}h. Re-run them when you are ready to approve; the plan is re-derived."
+          fi
