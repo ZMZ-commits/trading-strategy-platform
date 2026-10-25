@@ -1,0 +1,215 @@
+# Phase 4, second half of docs/K8S_MIGRATION.md -- move the data from the VM's
+# docker volumes into the cluster's PersistentVolumeClaims.
+#
+# WHY THIS IS A WORKFLOW AND NOT A SCRIPT ON A LAPTOP
+#
+# It needs two things at once: SSH to the production VM (the source) and the
+# cluster API over the tailnet (the destination). CI already holds both, and a
+# laptop holding both is exactly the arrangement the rest of this migration
+# spent its effort removing. It also means the copy is reviewable and its log
+# is kept.
+#
+# HOW THE DATA MOVES
+#
+# `tar` streamed over a pipe -- VM to runner to pod -- with nothing written to
+# disk at either end. The destination is a RUNNING POD, not a volume, because
+# a PVC is only a claim; the directory on the node exists because a pod mounted
+# it. So the pods must be Running before this does anything useful, which the
+# preflight checks rather than assumes.
+#
+# On the VM every read goes through `docker run` on the backend image rather
+# than the host filesystem. /data/{env} is root-owned and the `deploy` user is
+# not, and the dataset directories are docker volumes with no host path worth
+# knowing. One mechanism for both, and no sudo.
+#
+# RE-RUNNING IS SAFE AND DOES NOT CLEAN UP
+#
+# `tar -x` overwrites what it carries and leaves everything else alone. That is
+# deliberate: a copy that deleted unknown files would be a worse failure than
+# a copy that left some behind. If you need the target empty, empty it yourself
+# and know why.
+#
+# WHAT "DONE" MEANS -- from the migration doc, unchanged:
+#   a port-forwarded backend lists ALL ELEVEN strategies.
+# The verify step asks the app for that number and fails if it is short.
+
+name: Migrate Data to PVCs
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would be copied, copy nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: data-migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Reuses the cluster's existing approval gate. This writes to the same
+    # cluster the k8s stack does, and it writes DATA -- which no
+    # `terraform destroy` brings back and no plan shows you first.
+    environment: k8s-apply
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the secrets this needs are present
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+          TS_CI_AUTHKEY: ${{ secrets.TS_CI_AUTHKEY }}
+        run: |
+          missing=""
+          for s in SSH_HOST SSH_KEY KUBECONFIG_B64 TS_CI_AUTHKEY; do
+            [ -z "${!s}" ] && missing="$missing $s"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing secrets:$missing"; exit 1
+          fi
+
+      - name: Set up the SSH key
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          args: --accept-routes
+
+      - name: Write the kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > kubeconfig.yaml
+          chmod 600 kubeconfig.yaml
+          sed -i 's|server: https://[0-9.]*:6443|server: https://10.0.1.10:6443|' kubeconfig.yaml
+
+      - name: Wait for the API server
+        run: |
+          for i in $(seq 30); do
+            timeout 2 bash -c "cat < /dev/null > /dev/tcp/10.0.1.10/6443" 2>/dev/null && exit 0
+            sleep 2
+          done
+          echo "::error::10.0.1.10:6443 unreachable over the tailnet"; exit 1
+
+      # A pod that is not Running has not mounted its PVC, so `kubectl exec`
+      # into it fails with a message about a missing container -- which reads
+      # like a name typo rather than a scheduling problem. Pinning all four
+      # pods to one node (see storage.tf) makes Pending a likely state here,
+      # so name that cause explicitly instead of leaving it to be rediscovered.
+      - name: Preflight -- pods Running, PVCs Bound
+        env:
+          KUBECONFIG: kubeconfig.yaml
+        run: |
+          bad=0
+          for e in prod stg dev; do
+            phase=$(kubectl -n tsp get pods -l "app=backend,env=$e" \
+              -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
+            echo "backend-$e: ${phase:-<no pod>}"
+            [ "$phase" = "Running" ] || bad=1
+          done
+          echo
+          kubectl -n tsp get pvc
+          for pvc in workspace store-prod store-stg store-dev \
+                     datasets-prod datasets-stg datasets-dev; do
+            st=$(kubectl -n tsp get pvc "$pvc" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            [ "$st" = "Bound" ] || { echo "::warning::pvc $pvc is ${st:-missing}"; bad=1; }
+          done
+          if [ "$bad" != "0" ]; then
+            echo "::error::not ready to copy. A Pending pod with an affinity message means the node pinning in storage.tf did not take."
+            kubectl -n tsp describe pods -l app=backend | grep -A8 "Events:" || true
+            exit 1
+          fi
+
+      # Measured on every run, dry or not. The copy is small enough that
+      # measuring it is free, and these numbers are the only way to tell a
+      # successful copy of nothing from a successful copy.
+      - name: Measure the source
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "deploy@$SSH_HOST" bash -s <<'REMOTE'
+          set -eu
+          img=ghcr.io/zmz-commits/trading-strategy-backend:prod
+          probe='printf "%s\t%s files\n" "$(du -sh /v | cut -f1)" "$(find /v -type f | wc -l)"'
+          for spec in "workspace deploy_workspace" \
+                      "datasets-prod deploy_dataset_prod" \
+                      "datasets-stg deploy_dataset_stg" \
+                      "datasets-dev deploy_dataset_dev" \
+                      "store-prod /data/prod" \
+                      "store-stg /data/stg" \
+                      "store-dev /data/dev"; do
+            set -- $spec
+            printf '%-14s ' "$1"
+            docker run --rm -v "$2:/v:ro" --entrypoint sh "$img" -c "$probe"
+          done
+          REMOTE
+
+      - name: Copy
+        if: ${{ inputs.dry_run == false }}
+        env:
+          KUBECONFIG: kubeconfig.yaml
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -o pipefail
+          img=ghcr.io/zmz-commits/trading-strategy-backend:prod
+
+          # $1 label, $2 source on the VM, $3 pod, $4 destination in the pod
+          #
+          # The extracted listing is kept rather than counted in the pipe, so
+          # the log says WHAT arrived and not only how much. A copy that moves
+          # the right number of wrong files reads as a success otherwise.
+          copy() {
+            echo "::group::$1 -> $3:$4"
+            ssh -i ~/.ssh/id_deploy -o BatchMode=yes "deploy@$SSH_HOST" \
+              "docker run --rm -v '$2:/v:ro' --entrypoint tar '$img' -C /v -cz ." \
+              | kubectl -n tsp exec -i "deploy/$3" -- tar -C "$4" -xzv > "/tmp/$1.list"
+            echo "entries extracted: $(wc -l < "/tmp/$1.list")"
+            head -20 "/tmp/$1.list"
+            echo "::endgroup::"
+          }
+
+          # The workspace is ONE volume shared by all four pods, so it is
+          # copied once, through prod. Writing it three times would be three
+          # chances to interleave two tars in the same directory.
+          copy workspace deploy_workspace backend-prod /workspace
+
+          for e in prod stg dev; do
+            copy "datasets-$e" "deploy_dataset_$e" "backend-$e" /data/datasets
+            copy "store-$e"    "/data/$e"          "backend-$e" /data/trading-strategies
+          done
+
+      # The migration doc's bar, checked rather than eyeballed -- and asked of
+      # the app, not the filesystem. Files in the right place that the backend
+      # cannot parse would pass a `find` and fail a user.
+      - name: Verify -- prod lists all eleven strategies
+        if: ${{ inputs.dry_run == false }}
+        env:
+          KUBECONFIG: kubeconfig.yaml
+        run: |
+          n=$(kubectl -n tsp exec deploy/backend-prod -- python -c \
+            "import json,urllib.request;print(len(json.load(urllib.request.urlopen('http://localhost:8000/strategies'))))")
+          echo "backend-prod /strategies -> $n"
+          if [ "$n" -lt 11 ]; then
+            echo "::error::expected 11 strategies, got $n -- the copy landed but the app does not see all of it"
+            exit 1
+          fi
+          echo "### Phase 4 complete -- backend-prod lists $n strategies" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry-run notice
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "### Dry run -- nothing was copied" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Re-run with `dry_run: false` to copy.' >> "$GITHUB_STEP_SUMMARY"
