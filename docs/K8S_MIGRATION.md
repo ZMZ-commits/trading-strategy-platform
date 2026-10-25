@@ -129,7 +129,7 @@ runner starting from empty state builds a second server.
 
 Both stacks are on Cloudflare R2 with `use_lockfile`, under separate keys.
 
-### 3 — The stateless services
+### 3 — The stateless services ✅ done
 
 `redis`, `sandbox`, and the three backends as Deployments and Services. No
 ingress yet, no data — reach them with `kubectl port-forward`.
@@ -142,6 +142,27 @@ PersistentVolumeClaims, then restore the workspace tarball into the new
 `workspace` PVC. Copy `/data/{env}` and the dataset volumes across.
 
 *Done when:* a port-forwarded backend lists **all eleven** strategies.
+
+**The claims exist** (`infrastructure/terraform/k8s/storage.tf`): seven PVCs —
+one shared `workspace`, and `store-{env}` / `datasets-{env}` per environment.
+The file's own header explains why all four workspace-mounting pods are pinned
+to the `data` node, and what that costs.
+
+**The data moves in CI**, not from a laptop:
+`.github/workflows/data-migrate.yml`, `workflow_dispatch`, gated on the
+`k8s-apply` environment. It needs SSH to the VM *and* the cluster API over the
+tailnet at the same time, and CI is the only place that holds both. Defaults to
+`dry_run: true`, which measures every source and copies nothing. The copy is
+`tar` streamed VM → runner → pod, nothing written to disk at either end, and the
+verify step asks `backend-prod` for `/strategies` and fails below eleven.
+
+**It writes into a running pod, not a volume.** A PVC is only a claim; the
+directory on the node exists because a pod mounted it. So the preflight checks
+all three backends are `Running` and all seven PVCs `Bound` before touching
+anything — and says plainly that a `Pending` pod with an affinity message is
+the storage problem wearing a scheduling costume.
+
+Re-running is safe: `tar -x` overwrites what it carries and deletes nothing.
 
 ### 5 — Ingress and TLS
 
@@ -164,6 +185,15 @@ move to CI: build `deploy/Dockerfile.codeserver`, push to
 *Done when:* the image exists in ghcr and the compose pulls it instead of
 building it. Worth doing even if the migration stalls — it removes a build
 toolchain from a production box.
+
+**Half done.** `.github/workflows/codeserver-image.yml` has built and pushed
+`:prod` from `main` since 2026-09-16. But `deploy/docker-compose.yml` still
+carries `build:` for `code-server` and the locally-built
+`trading-code-server:latest` tag, so the VM still builds it — which is the half
+that actually removes the toolchain. Flip it to the ghcr image **after
+confirming the tag is pullable**: a compose that pulls a tag which turns out
+not to exist takes the IDE down on the next deploy, and `docker compose up`
+will not fall back to building once `build:` is gone.
 
 ### 7 — Parallel run
 
